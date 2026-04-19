@@ -1,2 +1,0 @@
-C:\Users\fujis\Desktop\workspace\AlienExodus\Client\Packages\com.fujisheng.unitycli\UnityCliBridge~\bin\Release\net8.0\win-x64\publish\unitycli.pdb
-C:\Users\fujis\Desktop\workspace\AlienExodus\Client\Packages\com.fujisheng.unitycli\UnityCliBridge~\bin\Release\net8.0\win-x64\publish\unitycli.exe

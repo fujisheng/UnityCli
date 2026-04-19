@@ -1,2 +1,0 @@
-C:\Users\fujis\Desktop\workspace\AlienExodus\Client\Packages\Library\UnityCliBridge\unitycli.pdb
-C:\Users\fujis\Desktop\workspace\AlienExodus\Client\Packages\Library\UnityCliBridge\unitycli.exe

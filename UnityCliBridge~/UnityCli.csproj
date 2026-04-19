@@ -11,8 +11,8 @@
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <PublishTrimmed>false</PublishTrimmed>
-    <OutDir>$(MSBuildProjectDirectory)/../../Library/UnityCliBridge/</OutDir>
-    <PublishDir>$(MSBuildProjectDirectory)/../../Library/UnityCliBridge/</PublishDir>
+    <OutDir>$(MSBuildProjectDirectory)/../../../Library/UnityCliBridge/</OutDir>
+    <PublishDir>$(MSBuildProjectDirectory)/../../../Library/UnityCliBridge/</PublishDir>
   </PropertyGroup>
 
   <ItemGroup>

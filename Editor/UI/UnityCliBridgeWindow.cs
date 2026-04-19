@@ -162,26 +162,6 @@ namespace UnityCli.Editor.UI
                 EditorGUILayout.BeginHorizontal();
                 GUILayout.Box(statusDotYellow, GUILayout.Width(10), GUILayout.Height(10));
                 EditorGUILayout.LabelField("Bridge 编译", headerLabelStyle);
-
-                GUILayout.FlexibleSpace();
-
-                EditorGUILayout.LabelField("配置", GUILayout.Width(30));
-                var settings = UnityCliBridgeSettings.LoadOrCreate();
-                var configs = new[] { "Release", "Debug" };
-                var configIndex = Array.IndexOf(configs, settings.buildConfiguration);
-                if (configIndex < 0)
-                {
-                    configIndex = 0;
-                }
-
-                var newConfigIndex = EditorGUILayout.Popup(configIndex, configs, GUILayout.Width(80));
-                if (newConfigIndex != configIndex)
-                {
-                    settings.buildConfiguration = configs[newConfigIndex];
-                    EditorUtility.SetDirty(settings);
-                    AssetDatabase.SaveAssets();
-                }
-
                 EditorGUILayout.EndHorizontal();
 
                 EditorGUILayout.Space(2);
@@ -191,12 +171,12 @@ namespace UnityCli.Editor.UI
                     EditorGUILayout.BeginHorizontal();
                     if (GUILayout.Button("编译 Bridge", GUILayout.Height(28)))
                     {
-                        BuildBridge(settings.buildConfiguration);
+                        BuildBridge();
                     }
 
                     if (GUILayout.Button("编译并启动", GUILayout.Height(28)))
                     {
-                        BuildBridge(settings.buildConfiguration, restartAfterBuild: true);
+                        BuildBridge(restartAfterBuild: true);
                     }
 
                     EditorGUILayout.EndHorizontal();
@@ -376,7 +356,7 @@ namespace UnityCli.Editor.UI
 
         // ──────────────────────────── 编译逻辑 ────────────────────────────
 
-        void BuildBridge(string configuration, bool restartAfterBuild = false)
+        void BuildBridge(bool restartAfterBuild = false)
         {
             if (isBuilding)
             {
@@ -399,13 +379,13 @@ namespace UnityCli.Editor.UI
             }
 
             isBuilding = true;
-            buildLog = $"开始编译 ({configuration})...\n项目：{projectFile}\n\n";
+            buildLog = $"开始编译 (Release)...\n项目：{projectFile}\n\n";
 
             try
             {
                 var process = new Process();
                 process.StartInfo.FileName = "dotnet";
-                process.StartInfo.Arguments = $"publish \"{projectFile}\" -c {configuration} --nologo -v minimal";
+                process.StartInfo.Arguments = $"publish \"{projectFile}\" -c Release --nologo -v minimal";
                 process.StartInfo.WorkingDirectory = bridgeDir;
                 process.StartInfo.UseShellExecute = false;
                 process.StartInfo.RedirectStandardOutput = true;

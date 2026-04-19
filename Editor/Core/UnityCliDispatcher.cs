@@ -24,25 +24,31 @@ namespace UnityCli.Editor.Core
         public static InvokeResponse Dispatch(InvokeRequest request)
         {
             var normalizedRequest = NormalizeRequest(request);
+            Debug.Log($"<color=#4CAF50>[UnityCli]</color> 调用工具: {normalizedRequest.tool} (requestId={normalizedRequest.requestId})");
+
             if (!UnityCliAllowlist.IsAllowed(normalizedRequest.tool))
             {
+                Debug.LogWarning($"<color=#FFC107>[UnityCli]</color> 工具 '{normalizedRequest.tool}' 未在白名单中启用。");
                 return CreateErrorResponse(normalizedRequest.requestId, "tool_not_found", $"未找到工具 '{normalizedRequest.tool}'。");
             }
 
             if (!UnityCliRegistry.TryGetTool(normalizedRequest.tool, out var tool)
                 || !UnityCliRegistry.TryGetDescriptor(normalizedRequest.tool, out var descriptor))
             {
+                Debug.LogWarning($"<color=#FFC107>[UnityCli]</color> 工具 '{normalizedRequest.tool}' 未注册。");
                 return CreateErrorResponse(normalizedRequest.requestId, "tool_not_found", $"未找到工具 '{normalizedRequest.tool}'。");
             }
 
             var editorState = ToolContext.EditorStateSnapshot.Capture();
             if (!IsModeAllowed(descriptor.mode, editorState.IsPlaying))
             {
+                Debug.LogWarning($"<color=#FFC107>[UnityCli]</color> 工具 '{normalizedRequest.tool}' 模式不匹配 (mode={descriptor.mode}, isPlaying={editorState.IsPlaying})。");
                 return CreateErrorResponse(normalizedRequest.requestId, "wrong_mode", $"工具 '{normalizedRequest.tool}' 当前运行模式不匹配。");
             }
 
             if (IsEditorBusy(editorState))
             {
+                Debug.LogWarning($"<color=#FFC107>[UnityCli]</color> Editor 忙碌，跳过工具 '{normalizedRequest.tool}'。");
                 return CreateErrorResponse(normalizedRequest.requestId, "editor_busy", "Unity Editor 当前忙碌，暂时无法执行请求。");
             }
 
@@ -57,12 +63,14 @@ namespace UnityCli.Editor.Core
             }
             catch (Exception exception)
             {
+                Debug.LogError($"<color=#F44336>[UnityCli]</color> 工具 '{normalizedRequest.tool}' 执行异常: {exception.Message}");
                 Debug.LogException(exception);
                 return CreateErrorResponse(normalizedRequest.requestId, "tool_execution_failed", $"工具 '{normalizedRequest.tool}' 执行失败。", exception.ToString());
             }
 
             if (result == null)
             {
+                Debug.LogError($"<color=#F44336>[UnityCli]</color> 工具 '{normalizedRequest.tool}' 返回了空结果。");
                 return CreateErrorResponse(normalizedRequest.requestId, "tool_execution_failed", $"工具 '{normalizedRequest.tool}' 返回了空结果。");
             }
 
@@ -78,9 +86,11 @@ namespace UnityCli.Editor.Core
                     return CreateErrorResponse(normalizedRequest.requestId, "tool_execution_failed", $"工具 '{normalizedRequest.tool}' 返回了无效的 JobId。");
                 }
 
+                Debug.Log($"<color=#4CAF50>[UnityCli]</color> 工具 '{normalizedRequest.tool}' 返回异步 Job: {result.JobId}");
                 UnityCliJobManager.RegisterPendingJob(normalizedRequest, asyncTool, context, result);
             }
 
+            Debug.Log($"<color=#4CAF50>[UnityCli]</color> 工具 '{normalizedRequest.tool}' 完成 (status={result.Status})");
             return result.ToInvokeResponse(normalizedRequest.requestId);
         }
 
