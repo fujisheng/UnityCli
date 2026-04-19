@@ -1,0 +1,26 @@
+{
+    "name": "com.fujisheng.unitycli.tests",
+    "rootNamespace": "",
+    "references": [
+        "com.fujisheng.unitycli.editor",
+        "com.fujisheng.unitycli.runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

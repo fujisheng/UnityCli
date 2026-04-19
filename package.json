@@ -1,0 +1,11 @@
+{
+  "name": "com.fujisheng.unitycli",
+  "version": "0.1.0",
+  "displayName": "UnityCli",
+  "description": "CLI for Unity Editor - allows external tools to call Unity functionality via HTTP/JSON",
+  "unity": "2021.3",
+  "dependencies": {},
+  "author": {
+    "name": "fujisheng"
+  }
+}

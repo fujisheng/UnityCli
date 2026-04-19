@@ -1,0 +1,18 @@
+{
+  "enabledTools": [
+    "__test.echo",
+    "__test.sleep",
+    "editor.status",
+    "scene",
+    "console",
+    "editor",
+    "gameobject.find",
+    "gameobject",
+    "asset",
+    "packages",
+    "component",
+    "prefab",
+    "script.create",
+    "script.validate"
+  ]
+}

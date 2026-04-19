@@ -1,0 +1,2 @@
+C:\Users\fujis\Desktop\workspace\AlienExodus\Client\Tools\UnityCli\publish_check\unitycli.pdb
+C:\Users\fujis\Desktop\workspace\AlienExodus\Client\Tools\UnityCli\publish_check\unitycli.exe
