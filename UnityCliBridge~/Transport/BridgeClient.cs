@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 using UnityCli.Protocol;
 using UnityCli.Output;
 
-namespace UnityCli.Http
+namespace UnityCli.Transport
 {
     class BridgeClient
     {

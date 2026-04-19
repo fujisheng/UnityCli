@@ -39,11 +39,11 @@ namespace UnityCli.Editor.UI
         Texture2D statusDotYellow;
         bool stylesInitialized;
 
-        [MenuItem("UnityCli/Bridge Window")]
+        [MenuItem("UnityCli/Window")]
         public static void ShowWindow()
         {
             var window = GetWindow<UnityCliBridgeWindow>();
-            window.titleContent = new GUIContent("UnityCli Bridge");
+            window.titleContent = new GUIContent("UnityCli");
             window.minSize = new Vector2(420, 500);
         }
 

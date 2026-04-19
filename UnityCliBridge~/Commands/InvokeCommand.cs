@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using UnityCli.Protocol;
-using UnityCli.Http;
+using UnityCli.Transport;
 using UnityCli.Output;
 
 namespace UnityCli.Commands

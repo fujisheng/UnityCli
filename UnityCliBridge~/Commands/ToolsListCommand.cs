@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using UnityCli.Http;
+using UnityCli.Transport;
 using UnityCli.Output;
 
 namespace UnityCli.Commands
