@@ -82,9 +82,7 @@ namespace UnityCli.Transport
 
         public BridgeClient(string? projectPath)
         {
-            ProjectPath = string.IsNullOrWhiteSpace(projectPath)
-                ? Directory.GetCurrentDirectory()
-                : Path.GetFullPath(projectPath);
+            ProjectPath = ResolveProjectPath(projectPath);
         }
 
         public string GetEndpointFilePath()
@@ -95,6 +93,77 @@ namespace UnityCli.Transport
         public static BridgeDiscoveryResult FindBridge(string? projectPath)
         {
             return new BridgeClient(projectPath).FindBridge();
+        }
+
+        static string ResolveProjectPath(string? projectPath)
+        {
+            if (!string.IsNullOrWhiteSpace(projectPath))
+            {
+                return TryResolveUnityProjectPath(projectPath, out var resolvedProjectPath)
+                    ? resolvedProjectPath
+                    : Path.GetFullPath(projectPath);
+            }
+
+            if (TryResolveUnityProjectPath(Directory.GetCurrentDirectory(), out var currentDirectoryProjectPath))
+            {
+                return currentDirectoryProjectPath;
+            }
+
+            if (TryResolveUnityProjectPath(AppContext.BaseDirectory, out var appBaseDirectoryProjectPath))
+            {
+                return appBaseDirectoryProjectPath;
+            }
+
+            return Directory.GetCurrentDirectory();
+        }
+
+        static bool TryResolveUnityProjectPath(string path, out string resolvedProjectPath)
+        {
+            resolvedProjectPath = string.Empty;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            string fullPath;
+            try
+            {
+                fullPath = Path.GetFullPath(path);
+            }
+            catch
+            {
+                return false;
+            }
+
+            DirectoryInfo? directory = null;
+            if (Directory.Exists(fullPath))
+            {
+                directory = new DirectoryInfo(fullPath);
+            }
+            else if (File.Exists(fullPath))
+            {
+                directory = new FileInfo(fullPath).Directory;
+            }
+
+            while (directory != null)
+            {
+                if (LooksLikeUnityProjectRoot(directory.FullName))
+                {
+                    resolvedProjectPath = directory.FullName;
+                    return true;
+                }
+
+                directory = directory.Parent;
+            }
+
+            return false;
+        }
+
+        static bool LooksLikeUnityProjectRoot(string path)
+        {
+            return Directory.Exists(Path.Combine(path, "Assets"))
+                && Directory.Exists(Path.Combine(path, "Packages"))
+                && Directory.Exists(Path.Combine(path, "ProjectSettings"));
         }
 
         public BridgeDiscoveryResult FindBridge()
