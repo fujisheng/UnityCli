@@ -50,9 +50,18 @@ unitycli tools list
 
 # 调用工具（PowerShell 推荐 stdin 管道）
 '{"args":{}}' | unitycli invoke --tool editor.status --stdin
+
+# 用更易读的格式查看输出
+unitycli --format pretty-json ping
+unitycli --format human tools list
+unitycli --format json ping
 ```
 
 默认情况下，CLI 会先从当前工作目录向上自动发现 Unity 项目根；如果当前目录不在 Unity 项目内，则会再尝试从 CLI 自身所在目录向上发现。只有在从项目外部调用时，才需要显式传入 `--project`。
+
+默认 stdout 现在使用 `human`，这样所有命令默认都会输出更适合终端阅读的块状文本。
+
+`--format` 只影响命令行 stdout 的展示形式，不改变 CLI 与 Unity Bridge 之间的内部 JSON 协议；如果需要格式化 JSON，可显式使用 `--format pretty-json`，如果需要单行紧凑输出，可显式使用 `--format json`。
 
 > **PowerShell 注意**：Windows PowerShell 5.1 对 `--json` 参数的引号处理不稳定，必须使用 `--stdin` 管道方式调用。
 

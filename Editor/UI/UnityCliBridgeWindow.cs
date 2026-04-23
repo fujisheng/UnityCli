@@ -200,7 +200,7 @@ namespace UnityCli.Editor.UI
                 EditorGUI.BeginDisabledGroup(isBuilding);
                 if (GUILayout.Button(GetPrimaryActionLabel(hasBridgeExecutable, isRunning), GUILayout.Height(24)))
                 {
-                    if (!hasBridgeExecutable)
+                    if (!hasBridgeExecutable || isRunning)
                     {
                         BuildBridge(restartAfterBuild: true);
                     }

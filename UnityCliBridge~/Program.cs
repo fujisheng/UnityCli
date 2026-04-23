@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using UnityCli.Commands;
@@ -10,13 +11,18 @@ namespace UnityCli
     {
         static async Task<int> Main(string[] args)
         {
-            if (args.Length == 0 || IsHelp(args[0]))
+            if (!TryParseGlobalOptions(args, out var normalizedArgs, out var errorPayload))
+            {
+                return ResultFormatter.WritePayloadAndGetExitCode(errorPayload);
+            }
+
+            if (normalizedArgs.Length == 0 || IsHelp(normalizedArgs[0]))
             {
                 return PrintHelp();
             }
 
-            var command = args[0].ToLowerInvariant();
-            var commandArgs = args.Skip(1).ToArray();
+            var command = normalizedArgs[0].ToLowerInvariant();
+            var commandArgs = normalizedArgs.Skip(1).ToArray();
             switch (command)
             {
                 case "ping":
@@ -36,6 +42,54 @@ namespace UnityCli
                             usage = CliUsage.All
                         }));
             }
+
+                static bool TryParseGlobalOptions(string[] args, out string[] normalizedArgs, out object errorPayload)
+                {
+                    normalizedArgs = Array.Empty<string>();
+                    errorPayload = null!;
+
+                    var outputFormat = CliOutputFormat.Human;
+                    var remainingArgs = new List<string>(args.Length);
+                    for (var index = 0; index < args.Length; index++)
+                    {
+                        if (!string.Equals(args[index], "--format", StringComparison.OrdinalIgnoreCase))
+                        {
+                            remainingArgs.Add(args[index]);
+                            continue;
+                        }
+
+                        if (index + 1 >= args.Length)
+                        {
+                            errorPayload = ResultFormatter.CreateErrorPayload(
+                                "invalid_arguments",
+                                "--format 需要输出格式参数。",
+                                new
+                                {
+                                    usage = CliUsage.All,
+                                    outputFormats = ResultFormatter.SupportedOutputFormatNames
+                                });
+                            return false;
+                        }
+
+                        var rawFormat = args[++index];
+                        if (!ResultFormatter.TryParseOutputFormat(rawFormat, out outputFormat))
+                        {
+                            errorPayload = ResultFormatter.CreateErrorPayload(
+                                "invalid_arguments",
+                                $"不支持的输出格式: {rawFormat}。",
+                                new
+                                {
+                                    usage = CliUsage.All,
+                                    outputFormats = ResultFormatter.SupportedOutputFormatNames
+                                });
+                            return false;
+                        }
+                    }
+
+                    ResultFormatter.SetOutputFormat(outputFormat);
+                    normalizedArgs = remainingArgs.ToArray();
+                    return true;
+                }
         }
 
         static Task<int> RunToolsCommand(string[] args)
@@ -81,55 +135,59 @@ namespace UnityCli
         {
             return ResultFormatter.WritePayloadAndGetExitCode(ResultFormatter.CreateSuccessPayload(new
             {
-                usage = CliUsage.All
+                usage = CliUsage.All,
+                outputFormats = ResultFormatter.SupportedOutputFormatNames,
+                defaultOutputFormat = "human"
             }, "UnityCli 命令参考"));
         }
     }
 
     static class CliUsage
     {
+        const string FormatOption = "[--format <json|pretty-json|human>]";
+
         public static readonly string[] All =
         {
-            "unitycli ping [--project <path>]",
-            "unitycli tools list [--project <path>]",
-            "unitycli tools describe <toolId> [--project <path>]",
-            "unitycli invoke --tool <toolId> --json <json> [--project <path>] [--wait] [--timeout <ms>]",
-            "unitycli invoke --tool <toolId> --stdin [--project <path>] [--wait] [--timeout <ms>]",
-            "unitycli invoke --tool <toolId> --in <file.json> [--project <path>] [--wait] [--timeout <ms>]",
-            "unitycli job-status <jobId> [--project <path>]"
+            $"unitycli {FormatOption} ping [--project <path>]",
+            $"unitycli {FormatOption} tools list [--project <path>]",
+            $"unitycli {FormatOption} tools describe <toolId> [--project <path>]",
+            $"unitycli {FormatOption} invoke --tool <toolId> --json <json> [--project <path>] [--wait] [--timeout <ms>]",
+            $"unitycli {FormatOption} invoke --tool <toolId> --stdin [--project <path>] [--wait] [--timeout <ms>]",
+            $"unitycli {FormatOption} invoke --tool <toolId> --in <file.json> [--project <path>] [--wait] [--timeout <ms>]",
+            $"unitycli {FormatOption} job-status <jobId> [--project <path>]"
         };
 
         public static readonly string[] Tools =
         {
-            "unitycli tools list [--project <path>]",
-            "unitycli tools describe <toolId> [--project <path>]"
+            $"unitycli {FormatOption} tools list [--project <path>]",
+            $"unitycli {FormatOption} tools describe <toolId> [--project <path>]"
         };
 
         public static readonly string[] Invoke =
         {
-            "unitycli invoke --tool <toolId> --json <json> [--project <path>] [--wait] [--timeout <ms>]",
-            "unitycli invoke --tool <toolId> --stdin [--project <path>] [--wait] [--timeout <ms>]",
-            "unitycli invoke --tool <toolId> --in <file.json> [--project <path>] [--wait] [--timeout <ms>]"
+            $"unitycli {FormatOption} invoke --tool <toolId> --json <json> [--project <path>] [--wait] [--timeout <ms>]",
+            $"unitycli {FormatOption} invoke --tool <toolId> --stdin [--project <path>] [--wait] [--timeout <ms>]",
+            $"unitycli {FormatOption} invoke --tool <toolId> --in <file.json> [--project <path>] [--wait] [--timeout <ms>]"
         };
 
         public static readonly string[] Ping =
         {
-            "unitycli ping [--project <path>]"
+            $"unitycli {FormatOption} ping [--project <path>]"
         };
 
         public static readonly string[] JobStatus =
         {
-            "unitycli job-status <jobId> [--project <path>]"
+            $"unitycli {FormatOption} job-status <jobId> [--project <path>]"
         };
 
         public static readonly string[] ToolsDescribe =
         {
-            "unitycli tools describe <toolId> [--project <path>]"
+            $"unitycli {FormatOption} tools describe <toolId> [--project <path>]"
         };
 
         public static readonly string[] ToolsList =
         {
-            "unitycli tools list [--project <path>]"
+            $"unitycli {FormatOption} tools list [--project <path>]"
         };
     }
 }

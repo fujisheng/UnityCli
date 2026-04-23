@@ -7,8 +7,46 @@ using System.Text;
 
 namespace UnityCli.Output
 {
+    enum CliOutputFormat
+    {
+        Json,
+        PrettyJson,
+        Human
+    }
+
     static class ResultFormatter
     {
+        static readonly string[] supportedOutputFormatNames = { "json", "pretty-json", "human" };
+
+        static CliOutputFormat outputFormat = CliOutputFormat.Human;
+
+        public static IReadOnlyList<string> SupportedOutputFormatNames => supportedOutputFormatNames;
+
+        public static void SetOutputFormat(CliOutputFormat format)
+        {
+            outputFormat = format;
+        }
+
+        public static bool TryParseOutputFormat(string? rawFormat, out CliOutputFormat format)
+        {
+            switch ((rawFormat ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "json":
+                    format = CliOutputFormat.Json;
+                    return true;
+                case "pretty":
+                case "pretty-json":
+                    format = CliOutputFormat.PrettyJson;
+                    return true;
+                case "human":
+                    format = CliOutputFormat.Human;
+                    return true;
+                default:
+                    format = CliOutputFormat.Json;
+                    return false;
+            }
+        }
+
         public static int WritePayloadAndGetExitCode(object? payload)
         {
             WritePayload(payload);
@@ -17,7 +55,7 @@ namespace UnityCli.Output
 
         public static void WritePayload(object? payload)
         {
-            Console.Out.WriteLine(CliJson.Serialize(payload));
+            Console.Out.WriteLine(FormatPayload(payload));
         }
 
         public static void WriteSuccess(object? data, string? message = null)
@@ -108,6 +146,354 @@ namespace UnityCli.Output
             }
 
             return CliObjectAccessor.TryGetString(errorPayload, "code", out var code) ? code : null;
+        }
+
+        static string FormatPayload(object? payload)
+        {
+            var json = CliJson.Serialize(payload);
+            return outputFormat switch
+            {
+                CliOutputFormat.PrettyJson => PrettyPrintJson(json),
+                CliOutputFormat.Human => HumanizePayload(json),
+                _ => json
+            };
+        }
+
+        static string PrettyPrintJson(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return json;
+            }
+
+            var builder = new StringBuilder(json.Length + 64);
+            var indent = 0;
+            var inString = false;
+            var escaping = false;
+
+            foreach (var current in json)
+            {
+                if (escaping)
+                {
+                    builder.Append(current);
+                    escaping = false;
+                    continue;
+                }
+
+                if (inString)
+                {
+                    builder.Append(current);
+                    if (current == '\\')
+                    {
+                        escaping = true;
+                    }
+                    else if (current == '"')
+                    {
+                        inString = false;
+                    }
+
+                    continue;
+                }
+
+                switch (current)
+                {
+                    case '"':
+                        inString = true;
+                        builder.Append(current);
+                        break;
+
+                    case '{':
+                    case '[':
+                        builder.Append(current);
+                        builder.AppendLine();
+                        indent++;
+                        AppendIndent(builder, indent);
+                        break;
+
+                    case '}':
+                    case ']':
+                        builder.AppendLine();
+                        indent = Math.Max(0, indent - 1);
+                        AppendIndent(builder, indent);
+                        builder.Append(current);
+                        break;
+
+                    case ',':
+                        builder.Append(current);
+                        builder.AppendLine();
+                        AppendIndent(builder, indent);
+                        break;
+
+                    case ':':
+                        builder.Append(": ");
+                        break;
+
+                    default:
+                        if (!char.IsWhiteSpace(current))
+                        {
+                            builder.Append(current);
+                        }
+
+                        break;
+                }
+            }
+
+            return builder.ToString();
+        }
+
+        static string HumanizePayload(string json)
+        {
+            if (!CliJson.TryDeserialize(json, out var normalizedPayload, out _))
+            {
+                return PrettyPrintJson(json);
+            }
+
+            var builder = new StringBuilder();
+            WriteHumanValue(builder, normalizedPayload, 0, null, isListItem: false);
+            return builder.ToString().TrimEnd();
+        }
+
+        static void WriteHumanValue(StringBuilder builder, object? value, int indent, string? label, bool isListItem)
+        {
+            if (value is string stringValue && stringValue.Contains("\n", StringComparison.Ordinal))
+            {
+                WriteHumanMultilineScalar(builder, stringValue, indent, label, isListItem);
+                return;
+            }
+
+            if (value is Dictionary<string, object> dictionary)
+            {
+                WriteHumanDictionary(builder, dictionary, indent, label, isListItem);
+                return;
+            }
+
+            if (value is IDictionary<string, object> genericDictionary)
+            {
+                WriteHumanDictionary(builder, genericDictionary, indent, label, isListItem);
+                return;
+            }
+
+            if (value is IList<object> list)
+            {
+                WriteHumanList(builder, list, indent, label, isListItem);
+                return;
+            }
+
+            if (value is IList rawList && value is not string)
+            {
+                WriteHumanList(builder, rawList, indent, label, isListItem);
+                return;
+            }
+
+            WriteHumanScalar(builder, FormatHumanScalar(value), indent, label, isListItem);
+        }
+
+        static void WriteHumanDictionary(StringBuilder builder, IEnumerable<KeyValuePair<string, object>> members, int indent, string? label, bool isListItem)
+        {
+            var orderedMembers = new List<KeyValuePair<string, object>>(members);
+            if (orderedMembers.Count == 0)
+            {
+                WriteHumanScalar(builder, "{}", indent, label, isListItem);
+                return;
+            }
+
+            var childIndent = WriteHumanContainerHeader(builder, indent, label, isListItem);
+            foreach (var pair in EnumerateHumanMembers(orderedMembers))
+            {
+                WriteHumanValue(builder, pair.Value, childIndent, pair.Key, isListItem: false);
+            }
+        }
+
+        static void WriteHumanList(StringBuilder builder, IEnumerable items, int indent, string? label, bool isListItem)
+        {
+            var materializedItems = new List<object?>();
+            foreach (var item in items)
+            {
+                materializedItems.Add(item);
+            }
+
+            if (materializedItems.Count == 0)
+            {
+                WriteHumanScalar(builder, "[]", indent, label, isListItem);
+                return;
+            }
+
+            var childIndent = WriteHumanContainerHeader(builder, indent, label, isListItem);
+            foreach (var item in materializedItems)
+            {
+                WriteHumanValue(builder, item, childIndent, null, isListItem: true);
+            }
+        }
+
+        static int WriteHumanContainerHeader(StringBuilder builder, int indent, string? label, bool isListItem)
+        {
+            if (!string.IsNullOrEmpty(label))
+            {
+                AppendIndent(builder, indent);
+                builder.Append(label).Append(':').AppendLine();
+                return indent + 2;
+            }
+
+            if (isListItem)
+            {
+                AppendIndent(builder, indent);
+                builder.Append('-').AppendLine();
+                return indent + 2;
+            }
+
+            return indent;
+        }
+
+        static void WriteHumanScalar(StringBuilder builder, string valueText, int indent, string? label, bool isListItem)
+        {
+            AppendIndent(builder, indent);
+            if (isListItem)
+            {
+                builder.Append("- ");
+            }
+
+            if (!string.IsNullOrEmpty(label))
+            {
+                builder.Append(label).Append(": ");
+            }
+
+            builder.Append(valueText).AppendLine();
+        }
+
+        static void WriteHumanMultilineScalar(StringBuilder builder, string value, int indent, string? label, bool isListItem)
+        {
+            AppendIndent(builder, indent);
+            if (isListItem)
+            {
+                builder.Append("- ");
+            }
+
+            if (!string.IsNullOrEmpty(label))
+            {
+                builder.Append(label).Append(": ");
+            }
+
+            builder.Append('|').AppendLine();
+            var lines = value.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+            foreach (var line in lines)
+            {
+                AppendIndent(builder, indent + 2);
+                builder.AppendLine(line);
+            }
+        }
+
+        static IEnumerable<KeyValuePair<string, object>> EnumerateHumanMembers(List<KeyValuePair<string, object>> members)
+        {
+            var preferredOrder = new[]
+            {
+                "ok",
+                "status",
+                "message",
+                "tool",
+                "jobId",
+                "requestId",
+                "error",
+                "data",
+                "result",
+                "details",
+                "usage",
+                "outputFormats"
+            };
+
+            var yieldedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var preferredKey in preferredOrder)
+            {
+                for (var index = 0; index < members.Count; index++)
+                {
+                    var pair = members[index];
+                    if (!string.Equals(pair.Key, preferredKey, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (yieldedKeys.Add(pair.Key))
+                    {
+                        yield return pair;
+                    }
+                }
+            }
+
+            foreach (var pair in members)
+            {
+                if (yieldedKeys.Add(pair.Key))
+                {
+                    yield return pair;
+                }
+            }
+        }
+
+        static string FormatHumanScalar(object? value)
+        {
+            if (value == null)
+            {
+                return "null";
+            }
+
+            return value switch
+            {
+                bool boolValue => boolValue ? "true" : "false",
+                string stringValue => FormatHumanString(stringValue),
+                IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture) ?? string.Empty,
+                _ => FormatHumanString(Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty)
+            };
+        }
+
+        static string FormatHumanString(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return "\"\"";
+            }
+
+            if (!NeedsHumanQuotes(value))
+            {
+                return value;
+            }
+
+            return '"' + value
+                .Replace("\\", "\\\\", StringComparison.Ordinal)
+                .Replace("\"", "\\\"", StringComparison.Ordinal) + '"';
+        }
+
+        static bool NeedsHumanQuotes(string value)
+        {
+            if (value.Length == 0)
+            {
+                return true;
+            }
+
+            if (value.StartsWith(" ", StringComparison.Ordinal)
+                || value.EndsWith(" ", StringComparison.Ordinal)
+                || value.StartsWith("-", StringComparison.Ordinal)
+                || value.StartsWith("{", StringComparison.Ordinal)
+                || value.StartsWith("[", StringComparison.Ordinal)
+                || value.Contains(": ", StringComparison.Ordinal)
+                || value.Contains('#', StringComparison.Ordinal)
+                || value.Contains('\t', StringComparison.Ordinal)
+                || value.Contains('\r', StringComparison.Ordinal)
+                || value.Contains('\n', StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (string.Equals(value, "null", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(value, "false", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out _);
+        }
+
+        static void AppendIndent(StringBuilder builder, int indent)
+        {
+            builder.Append(' ', Math.Max(0, indent));
         }
     }
 
