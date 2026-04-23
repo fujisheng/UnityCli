@@ -18,6 +18,7 @@ namespace UnityCli.Editor.UI
     {
         const string PackageName = "com.fujisheng.unitycli";
         const string BridgeOutputDir = "Library/UnityCliBridge";
+        const int StatusDotSize = 16;
         const int InitialVisibleLogCount = 20;
         const int VisibleLogBatchSize = 20;
         const double LogRefreshIntervalSeconds = 0.5d;
@@ -96,9 +97,9 @@ namespace UnityCli.Editor.UI
 
             stylesInitialized = true;
 
-            statusDotGreen = MakeColorTexture(new Color(0.3f, 0.85f, 0.4f));
-            statusDotRed = MakeColorTexture(new Color(0.9f, 0.3f, 0.3f));
-            statusDotYellow = MakeColorTexture(new Color(0.95f, 0.8f, 0.2f));
+            statusDotGreen = MakeStatusDotTexture(new Color(0.3f, 0.85f, 0.4f));
+            statusDotRed = MakeStatusDotTexture(new Color(0.9f, 0.3f, 0.3f));
+            statusDotYellow = MakeStatusDotTexture(new Color(0.95f, 0.8f, 0.2f));
 
             headerLabelStyle = new GUIStyle(EditorStyles.boldLabel)
             {
@@ -160,7 +161,8 @@ namespace UnityCli.Editor.UI
                 var hasBridgeExecutable = HasBridgeExecutable();
                 var bridgeExecutablePath = GetBridgeExecutablePath();
                 var dotTexture = isRunning ? statusDotGreen : statusDotRed;
-                GUILayout.Box(dotTexture, GUILayout.Width(10), GUILayout.Height(10));
+                var dotRect = GUILayoutUtility.GetRect(StatusDotSize, StatusDotSize, GUILayout.Width(StatusDotSize), GUILayout.Height(StatusDotSize));
+                GUI.DrawTexture(dotRect, dotTexture, ScaleMode.StretchToFill);
                 EditorGUILayout.LabelField("Bridge 状态", headerLabelStyle);
                 EditorGUILayout.EndHorizontal();
 
@@ -976,10 +978,33 @@ namespace UnityCli.Editor.UI
             EditorGUILayout.EndHorizontal();
         }
 
-        static Texture2D MakeColorTexture(Color color)
+        static Texture2D MakeStatusDotTexture(Color color)
         {
-            var tex = new Texture2D(1, 1);
-            tex.SetPixel(0, 0, color);
+            const int textureSize = 32;
+            var tex = new Texture2D(textureSize, textureSize, TextureFormat.RGBA32, false)
+            {
+                hideFlags = HideFlags.HideAndDontSave
+            };
+
+            var center = (textureSize - 1) * 0.5f;
+            var radius = textureSize * 0.38f;
+            var edgeSoftness = 1.5f;
+
+            for (var y = 0; y < textureSize; y++)
+            {
+                for (var x = 0; x < textureSize; x++)
+                {
+                    var dx = x - center;
+                    var dy = y - center;
+                    var distance = Mathf.Sqrt(dx * dx + dy * dy);
+                    var alpha = 1f - Mathf.Clamp01((distance - radius) / edgeSoftness);
+
+                    tex.SetPixel(x, y, new Color(color.r, color.g, color.b, alpha));
+                }
+            }
+
+            tex.wrapMode = TextureWrapMode.Clamp;
+            tex.filterMode = FilterMode.Bilinear;
             tex.Apply();
             return tex;
         }
