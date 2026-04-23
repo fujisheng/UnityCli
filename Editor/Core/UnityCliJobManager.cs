@@ -107,6 +107,8 @@ namespace UnityCli.Editor.Core
                 jobs[jobId] = new JobEntry(job, tool);
                 scheduledJobIds.Enqueue(jobId);
             }
+
+            UnityCliBridgeLogStore.AddJobQueued(jobId, request.tool, request.requestId);
         }
 
         static void HandleEditorUpdate()
@@ -191,6 +193,7 @@ namespace UnityCli.Editor.Core
                     job.Status = "running";
                     job.LastResponse = stepResult.ToInvokeResponse(job.RequestId);
                     scheduledJobIds.Enqueue(job.JobId);
+                    UnityCliBridgeLogStore.AddJobUpdated(job.JobId, job.ToolId, job.RequestId, job.Status, isSuccess: true);
                     return;
                 }
 
@@ -199,6 +202,7 @@ namespace UnityCli.Editor.Core
                     job.Status = "completed";
                     job.CompletedAtUtc = nowUtc;
                     job.LastResponse = stepResult.ToInvokeResponse(job.RequestId);
+                    UnityCliBridgeLogStore.AddJobUpdated(job.JobId, job.ToolId, job.RequestId, job.Status, isSuccess: true);
                     return;
                 }
 
@@ -211,6 +215,7 @@ namespace UnityCli.Editor.Core
             job.Status = "failed";
             job.CompletedAtUtc = nowUtc;
             job.LastResponse = result.ToInvokeResponse(job.RequestId);
+            UnityCliBridgeLogStore.AddJobUpdated(job.JobId, job.ToolId, job.RequestId, job.Status, isSuccess: false, result?.Message);
         }
 
         static bool IsTerminal(string status)

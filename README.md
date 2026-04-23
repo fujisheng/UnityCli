@@ -91,9 +91,9 @@ public class MyTool : IUnityCliTool
 
 菜单 `UnityCli → Bridge Window` 提供：
 - Bridge 连接状态监控
-- 一键编译 CLI
+- 自动检测 CLI 安装状态，可一键安装/启动/重启 Bridge
 - 工具列表管理（按分类折叠、搜索、启用/禁用）
-- 编译日志查看
+- Bridge 日志查看
 
 ## 目录结构
 
