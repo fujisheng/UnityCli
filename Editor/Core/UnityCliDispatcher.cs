@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using UnityCli.Protocol;
 using UnityEditor;
@@ -215,12 +217,20 @@ namespace UnityCli.Editor.Core
 
     public static class UnityCliBridgeLogStore
     {
-        const int MaxEntries = 1000;
+        const int MaxInMemoryEntries = 20;
+        const int MaxPersistedEntries = 100;
+        const int SerializedFieldCount = 9;
+        const string PersistedLogDirectory = "Library/UnityCliBridge";
+        const string PersistedLogFileName = "bridge-log.tsv";
+        const string EmptyFieldToken = "_";
 
         static readonly object syncRoot = new object();
-        static readonly List<UnityCliBridgeLogEntry> entries = new List<UnityCliBridgeLogEntry>(MaxEntries);
+        static readonly List<UnityCliBridgeLogEntry> recentEntries = new List<UnityCliBridgeLogEntry>(MaxInMemoryEntries);
 
         static long nextSequence;
+        static bool isSequenceInitialized;
+        static string persistedLogPath;
+        static string lastStorageWarning;
 
         public static void AddSystem(string message, LogType logType = LogType.Log, string details = null)
         {
@@ -277,7 +287,8 @@ namespace UnityCli.Editor.Core
         {
             lock (syncRoot)
             {
-                totalCount = entries.Count;
+                var allEntries = LoadMergedEntriesUnsafe();
+                totalCount = allEntries.Count;
                 if (totalCount == 0 || limit <= 0 || offset >= totalCount)
                 {
                     return new List<UnityCliBridgeLogEntry>();
@@ -289,7 +300,7 @@ namespace UnityCli.Editor.Core
                 var startIndex = totalCount - 1 - normalizedOffset;
                 for (var index = 0; index < count; index++)
                 {
-                    result.Add(entries[startIndex - index]);
+                    result.Add(allEntries[startIndex - index]);
                 }
 
                 return result;
@@ -300,8 +311,9 @@ namespace UnityCli.Editor.Core
         {
             lock (syncRoot)
             {
-                totalCount = entries.Count;
-                return entries
+                var allEntries = LoadMergedEntriesUnsafe();
+                totalCount = allEntries.Count;
+                return allEntries
                     .AsEnumerable()
                     .Reverse()
                     .ToList();
@@ -312,7 +324,10 @@ namespace UnityCli.Editor.Core
         {
             lock (syncRoot)
             {
-                entries.Clear();
+                recentEntries.Clear();
+                nextSequence = 0;
+                isSequenceInitialized = true;
+                DeletePersistedEntriesUnsafe();
             }
         }
 
@@ -320,7 +335,9 @@ namespace UnityCli.Editor.Core
         {
             lock (syncRoot)
             {
-                entries.Add(new UnityCliBridgeLogEntry(
+                EnsureSequenceInitializedUnsafe();
+
+                var entry = new UnityCliBridgeLogEntry(
                     ++nextSequence,
                     DateTime.UtcNow,
                     category,
@@ -329,13 +346,298 @@ namespace UnityCli.Editor.Core
                     requestId,
                     status,
                     details,
-                    logType));
+                    logType);
 
-                if (entries.Count > MaxEntries)
+                recentEntries.Add(entry);
+                TrimRecentEntriesUnsafe();
+                PersistEntryUnsafe(entry);
+            }
+        }
+
+        static List<UnityCliBridgeLogEntry> LoadMergedEntriesUnsafe()
+        {
+            var persistedEntries = LoadPersistedEntriesUnsafe();
+            if (recentEntries.Count == 0)
+            {
+                return persistedEntries;
+            }
+
+            var seenSequences = new HashSet<long>();
+            var mergedEntries = new List<UnityCliBridgeLogEntry>(persistedEntries.Count + recentEntries.Count);
+
+            foreach (var entry in persistedEntries)
+            {
+                if (seenSequences.Add(entry.Sequence))
                 {
-                    entries.RemoveAt(0);
+                    mergedEntries.Add(entry);
                 }
             }
+
+            foreach (var entry in recentEntries)
+            {
+                if (seenSequences.Add(entry.Sequence))
+                {
+                    mergedEntries.Add(entry);
+                }
+            }
+
+            mergedEntries.Sort((left, right) => left.Sequence.CompareTo(right.Sequence));
+            return mergedEntries;
+        }
+
+        static void TrimRecentEntriesUnsafe()
+        {
+            var overflowCount = recentEntries.Count - MaxInMemoryEntries;
+            if (overflowCount > 0)
+            {
+                recentEntries.RemoveRange(0, overflowCount);
+            }
+        }
+
+        static void EnsureSequenceInitializedUnsafe()
+        {
+            if (isSequenceInitialized)
+            {
+                return;
+            }
+
+            var persistedEntries = LoadPersistedEntriesUnsafe();
+            if (persistedEntries.Count > 0)
+            {
+                nextSequence = persistedEntries[persistedEntries.Count - 1].Sequence;
+            }
+
+            isSequenceInitialized = true;
+        }
+
+        static void PersistEntryUnsafe(UnityCliBridgeLogEntry entry)
+        {
+            var persistedEntries = LoadPersistedEntriesUnsafe();
+            persistedEntries.Add(entry);
+
+            var overflowCount = persistedEntries.Count - MaxPersistedEntries;
+            if (overflowCount > 0)
+            {
+                persistedEntries.RemoveRange(0, overflowCount);
+            }
+
+            SavePersistedEntriesUnsafe(persistedEntries);
+        }
+
+        static List<UnityCliBridgeLogEntry> LoadPersistedEntriesUnsafe()
+        {
+            var path = GetPersistedLogPath();
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            {
+                return new List<UnityCliBridgeLogEntry>();
+            }
+
+            try
+            {
+                var persistedEntries = new List<UnityCliBridgeLogEntry>();
+                foreach (var line in File.ReadLines(path))
+                {
+                    if (TryDeserializeEntry(line, out var entry))
+                    {
+                        persistedEntries.Add(entry);
+                    }
+                }
+
+                lastStorageWarning = null;
+                return persistedEntries;
+            }
+            catch (Exception exception)
+            {
+                ReportStorageWarning("读取 Bridge 日志文件失败", exception);
+                return new List<UnityCliBridgeLogEntry>();
+            }
+        }
+
+        static void SavePersistedEntriesUnsafe(List<UnityCliBridgeLogEntry> entries)
+        {
+            var path = GetPersistedLogPath();
+            if (string.IsNullOrEmpty(path))
+            {
+                return;
+            }
+
+            try
+            {
+                var directory = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                if (entries == null || entries.Count == 0)
+                {
+                    if (File.Exists(path))
+                    {
+                        File.Delete(path);
+                    }
+
+                    lastStorageWarning = null;
+                    return;
+                }
+
+                var serializedLines = new string[entries.Count];
+                for (var index = 0; index < entries.Count; index++)
+                {
+                    serializedLines[index] = SerializeEntry(entries[index]);
+                }
+
+                File.WriteAllLines(path, serializedLines, new UTF8Encoding(false));
+                lastStorageWarning = null;
+            }
+            catch (Exception exception)
+            {
+                ReportStorageWarning("写入 Bridge 日志文件失败", exception);
+            }
+        }
+
+        static void DeletePersistedEntriesUnsafe()
+        {
+            var path = GetPersistedLogPath();
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            {
+                lastStorageWarning = null;
+                return;
+            }
+
+            try
+            {
+                File.Delete(path);
+                lastStorageWarning = null;
+            }
+            catch (Exception exception)
+            {
+                ReportStorageWarning("清理 Bridge 日志文件失败", exception);
+            }
+        }
+
+        static string GetPersistedLogPath()
+        {
+            if (!string.IsNullOrEmpty(persistedLogPath))
+            {
+                return persistedLogPath;
+            }
+
+            var projectRoot = Directory.GetParent(Application.dataPath)?.FullName ?? string.Empty;
+            if (string.IsNullOrEmpty(projectRoot))
+            {
+                return string.Empty;
+            }
+
+            persistedLogPath = Path.Combine(projectRoot, PersistedLogDirectory, PersistedLogFileName);
+            return persistedLogPath;
+        }
+
+        static string SerializeEntry(UnityCliBridgeLogEntry entry)
+        {
+            return string.Join("\t", new[]
+            {
+                entry.Sequence.ToString(),
+                entry.TimestampUtc.Ticks.ToString(),
+                ((int)entry.LogType).ToString(),
+                EncodeField(entry.Category),
+                EncodeField(entry.Message),
+                EncodeField(entry.ToolId),
+                EncodeField(entry.RequestId),
+                EncodeField(entry.Status),
+                EncodeField(entry.Details)
+            });
+        }
+
+        static bool TryDeserializeEntry(string line, out UnityCliBridgeLogEntry entry)
+        {
+            entry = null;
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                return false;
+            }
+
+            var parts = line.Split(new[] { '\t' }, SerializedFieldCount, StringSplitOptions.None);
+            if (parts.Length != SerializedFieldCount)
+            {
+                return false;
+            }
+
+            if (!long.TryParse(parts[0], out var sequence)
+                || !long.TryParse(parts[1], out var timestampTicks)
+                || !int.TryParse(parts[2], out var logTypeValue))
+            {
+                return false;
+            }
+
+            if (!TryDecodeField(parts[3], out var category)
+                || !TryDecodeField(parts[4], out var message)
+                || !TryDecodeField(parts[5], out var toolId)
+                || !TryDecodeField(parts[6], out var requestId)
+                || !TryDecodeField(parts[7], out var status)
+                || !TryDecodeField(parts[8], out var details))
+            {
+                return false;
+            }
+
+            try
+            {
+                entry = new UnityCliBridgeLogEntry(
+                    sequence,
+                    new DateTime(timestampTicks, DateTimeKind.Utc),
+                    category,
+                    message,
+                    toolId,
+                    requestId,
+                    status,
+                    details,
+                    (LogType)logTypeValue);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        static string EncodeField(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return EmptyFieldToken;
+            }
+
+            return Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
+        }
+
+        static bool TryDecodeField(string value, out string decodedValue)
+        {
+            decodedValue = string.Empty;
+            if (string.IsNullOrEmpty(value) || string.Equals(value, EmptyFieldToken, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            try
+            {
+                decodedValue = Encoding.UTF8.GetString(Convert.FromBase64String(value));
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        static void ReportStorageWarning(string action, Exception exception)
+        {
+            var message = $"<color=#FFC107>[UnityCli]</color> {action}: {exception.Message}";
+            if (string.Equals(lastStorageWarning, message, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            lastStorageWarning = message;
+            Debug.LogWarning(message);
         }
 
         static string BuildInvokeRequestDetails(InvokeRequest request)
