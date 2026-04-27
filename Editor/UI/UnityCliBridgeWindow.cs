@@ -190,7 +190,7 @@ namespace UnityCli.Editor.UI
 
                 if (!hasBridgeExecutable)
                 {
-                    EditorGUILayout.HelpBox("未检测到 Bridge CLI 产物。点击下方「安装 Bridge」后会自动编译并启动。", MessageType.Warning);
+                    EditorGUILayout.HelpBox("未检测到 Bridge CLI 产物。点击下方「安装 Bridge」后会自动编译，并把包内 OpenCode skills 安装到当前项目的 .opencode/skills/ 目录。", MessageType.Warning);
                 }
                 else if (!isRunning)
                 {
@@ -551,6 +551,8 @@ namespace UnityCli.Editor.UI
                 buildLog += $"安装成功。\n\n{output}\n";
                 UnityCliBridgeLogStore.AddSystem("安装成功", LogType.Log);
 
+                CopyPackagedSkillsToProjectOpenCodeDirectory(packagePath);
+
                 var outputExe = GetBridgeExecutablePath();
                 if (File.Exists(outputExe))
                 {
@@ -892,9 +894,102 @@ namespace UnityCli.Editor.UI
             return string.Empty;
         }
 
+        void CopyPackagedSkillsToProjectOpenCodeDirectory(string packagePath)
+        {
+            if (string.IsNullOrWhiteSpace(packagePath))
+            {
+                buildLog += "\n[警告] 未找到包路径，已跳过 OpenCode skills 安装。";
+                UnityCliBridgeLogStore.AddSystem("跳过 OpenCode skills 安装：包路径为空", LogType.Warning);
+                return;
+            }
+
+            var sourceSkillsRoot = Path.Combine(packagePath, "Skills");
+            if (!Directory.Exists(sourceSkillsRoot))
+            {
+                buildLog += "\n[信息] 未找到 Skills 目录，跳过 OpenCode skills 安装。";
+                UnityCliBridgeLogStore.AddSystem("未找到 Skills 目录，跳过 OpenCode skills 安装", LogType.Log);
+                return;
+            }
+
+            var projectRoot = GetProjectRoot();
+            if (string.IsNullOrWhiteSpace(projectRoot) || !Directory.Exists(projectRoot))
+            {
+                buildLog += "\n[警告] 无法解析当前 Unity 项目根目录，已跳过 OpenCode skills 安装。";
+                UnityCliBridgeLogStore.AddSystem("跳过 OpenCode skills 安装：无法解析项目根目录", LogType.Warning);
+                return;
+            }
+
+            var destinationSkillsRoot = Path.Combine(projectRoot, ".opencode", "skills");
+            var copiedSkillCount = 0;
+            foreach (var sourceSkillDirectory in Directory.GetDirectories(sourceSkillsRoot))
+            {
+                var skillDirectoryName = Path.GetFileName(sourceSkillDirectory);
+                if (string.IsNullOrWhiteSpace(skillDirectoryName))
+                {
+                    continue;
+                }
+
+                var skillFilePath = Path.Combine(sourceSkillDirectory, "SKILL.md");
+                if (!File.Exists(skillFilePath))
+                {
+                    buildLog += $"\n[警告] 跳过 skills 目录（缺少 SKILL.md）：{sourceSkillDirectory}";
+                    UnityCliBridgeLogStore.AddSystem("跳过无效 Skills 目录", LogType.Warning, sourceSkillDirectory);
+                    continue;
+                }
+
+                var destinationSkillDirectory = Path.Combine(destinationSkillsRoot, skillDirectoryName);
+                CopyDirectory(sourceSkillDirectory, destinationSkillDirectory, overwrite: true);
+                copiedSkillCount++;
+                UnityCliBridgeLogStore.AddSystem("已安装项目级 OpenCode skill", LogType.Log, destinationSkillDirectory);
+            }
+
+            if (copiedSkillCount == 0)
+            {
+                buildLog += "\n[信息] 未发现可安装的 OpenCode skills。";
+                UnityCliBridgeLogStore.AddSystem("未发现可安装的 OpenCode skills", LogType.Log);
+                return;
+            }
+
+            buildLog += $"\n已安装 {copiedSkillCount} 个 OpenCode skills 到项目目录：{destinationSkillsRoot}";
+        }
+
+        static void CopyDirectory(string sourceDirectory, string destinationDirectory, bool overwrite)
+        {
+            Directory.CreateDirectory(destinationDirectory);
+
+            foreach (var sourceFilePath in Directory.GetFiles(sourceDirectory))
+            {
+                var fileName = Path.GetFileName(sourceFilePath);
+                if (string.IsNullOrWhiteSpace(fileName))
+                {
+                    continue;
+                }
+
+                var destinationFilePath = Path.Combine(destinationDirectory, fileName);
+                File.Copy(sourceFilePath, destinationFilePath, overwrite);
+            }
+
+            foreach (var sourceSubDirectory in Directory.GetDirectories(sourceDirectory))
+            {
+                var directoryName = Path.GetFileName(sourceSubDirectory);
+                if (string.IsNullOrWhiteSpace(directoryName))
+                {
+                    continue;
+                }
+
+                var destinationSubDirectory = Path.Combine(destinationDirectory, directoryName);
+                CopyDirectory(sourceSubDirectory, destinationSubDirectory, overwrite);
+            }
+        }
+
+        static string GetProjectRoot()
+        {
+            return Directory.GetParent(Application.dataPath)?.FullName ?? string.Empty;
+        }
+
         static string GetBridgeExecutablePath()
         {
-            var projectRoot = Directory.GetParent(Application.dataPath)?.FullName ?? string.Empty;
+            var projectRoot = GetProjectRoot();
             return string.IsNullOrEmpty(projectRoot)
                 ? string.Empty
                 : Path.Combine(projectRoot, BridgeOutputDir, "unitycli.exe");
