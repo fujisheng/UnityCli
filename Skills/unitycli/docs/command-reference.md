@@ -57,6 +57,15 @@ Common examples:
 
 # scene get_active
 '{"args":{"action":"get_active"}}' | Library/UnityCliBridge/unitycli.exe invoke --tool scene --stdin --project "C:\...\Client"
+
+# prefab create (build from scratch)
+'{"args":{"action":"create","prefab_path":"Assets/Prefabs/MyView.prefab","components_to_add":["Canvas","<YourComponentType>"],"create_child":[{"name":"ChildNode","components_to_add":["RectTransform","TMPro.TextMeshProUGUI"]}]}}' | Library/UnityCliBridge/unitycli.exe invoke --tool prefab --stdin --project "C:\...\Client"
+
+# prefab modify_contents + child_path (target a specific child)
+'{"args":{"action":"modify_contents","prefab_path":"Assets/Prefabs/MyView.prefab","child_path":"Parent/ChildNode","components_to_add":["<YourComponentType>"]}}' | Library/UnityCliBridge/unitycli.exe invoke --tool prefab --stdin --project "C:\...\Client"
+
+# prefab get_hierarchy (inspect prefab structure)
+'{"args":{"action":"get_hierarchy","prefab_path":"Assets/Prefabs/MyView.prefab"}}' | Library/UnityCliBridge/unitycli.exe invoke --tool prefab --stdin --project "C:\...\Client"
 ```
 
 ### invoke + wait

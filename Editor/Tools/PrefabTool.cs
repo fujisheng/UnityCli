@@ -25,6 +25,7 @@ namespace UnityCli.Editor.Tools
         {
             "get_info",
             "get_hierarchy",
+            "create",
             "create_from_gameobject",
             "modify_contents"
         };
@@ -50,7 +51,7 @@ namespace UnityCli.Editor.Tools
                     {
                         name = "action",
                         type = "string",
-                        description = "prefab action: get_info/get_hierarchy/create_from_gameobject/modify_contents",
+                        description = "prefab action: get_info/get_hierarchy/create/create_from_gameobject/modify_contents",
                         required = true
                     },
                     new ParamDescriptor
@@ -148,7 +149,14 @@ namespace UnityCli.Editor.Tools
                     {
                         name = "create_child",
                         type = "object",
-                        description = "Optional child spec or array of child specs for modify_contents",
+                        description = "Optional child spec or array of child specs for create / modify_contents",
+                        required = false
+                    },
+                    new ParamDescriptor
+                    {
+                        name = "child_path",
+                        type = "string",
+                        description = "Optional child path in prefab for modify_contents (targets root if omitted)",
                         required = false
                     },
                     new ParamDescriptor
@@ -180,6 +188,8 @@ namespace UnityCli.Editor.Tools
                     return HandleGetInfo(args);
                 case "get_hierarchy":
                     return HandleGetHierarchy(args);
+                case "create":
+                    return HandleCreate(args, context);
                 case "create_from_gameobject":
                     return HandleCreateFromGameObject(args, context);
                 case "modify_contents":
@@ -245,6 +255,119 @@ namespace UnityCli.Editor.Tools
             finally
             {
                 PrefabUtility.UnloadPrefabContents(prefabRoot);
+            }
+        }
+
+        static ToolResult HandleCreate(Dictionary<string, object> args, ToolContext context)
+        {
+            if (!EnsureWritable(context, out var error))
+            {
+                return error;
+            }
+
+            if (!TryGetPrefabPath(args, out var prefabPath, out error))
+            {
+                return error;
+            }
+
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath) != null)
+            {
+                return ToolResult.Error("invalid_parameter", "目标 prefab_path 已存在。", new
+                {
+                    prefab_path = prefabPath
+                });
+            }
+
+            if (!TryEnsureAssetFolderExists(prefabPath, out error))
+            {
+                return error;
+            }
+
+            // Determine root name from prefab file name
+            var rootName = System.IO.Path.GetFileNameWithoutExtension(prefabPath);
+            ArgsHelper.TryGetOptional(args, "name", rootName, out var customName, out _);
+            if (!string.IsNullOrWhiteSpace(customName))
+            {
+                rootName = customName;
+            }
+
+            // Parse optional position/rotation/scale
+            TryGetOptionalVector3(args, "position", out var hasPos, out var pos, out error);
+            if (error != null) return error;
+            TryGetOptionalVector3(args, "rotation", out var hasRot, out var rot, out error);
+            if (error != null) return error;
+            TryGetOptionalVector3(args, "scale", out var hasScale, out var scl, out error);
+            if (error != null) return error;
+
+            // Parse optional components
+            TryGetOptionalStringArray(args, "components_to_add", out _, out var componentNames, out error);
+            if (error != null) return error;
+            if (!TryResolveComponentTypes(componentNames, out var componentTypes, out error))
+            {
+                return error;
+            }
+
+            // Parse optional children
+            if (!TryParseChildCreateSpecs(args, out var childCreateSpecs, out error))
+            {
+                return error;
+            }
+
+            try
+            {
+                // Create root GameObject
+                var root = new GameObject(rootName, typeof(RectTransform));
+                if (hasPos) root.transform.localPosition = pos;
+                if (hasRot) root.transform.localRotation = Quaternion.Euler(rot);
+                if (hasScale) root.transform.localScale = scl;
+
+                // Add components
+                var addedComponents = new List<object>();
+                if (!TryAddComponents(root, componentTypes, addedComponents, out error))
+                {
+                    Object.DestroyImmediate(root);
+                    return error;
+                }
+
+                // Create children
+                var createdChildren = new List<object>();
+                if (!TryCreateChildren(root, childCreateSpecs, createdChildren, out error))
+                {
+                    Object.DestroyImmediate(root);
+                    return error;
+                }
+
+                // Save as prefab
+                var prefabAsset = PrefabUtility.SaveAsPrefabAsset(root, prefabPath, out var success);
+                if (!success || prefabAsset == null)
+                {
+                    Object.DestroyImmediate(root);
+                    return ToolResult.Error("tool_execution_failed", "Unity 未能创建 Prefab 资源。", new
+                    {
+                        action = "create",
+                        prefab_path = prefabPath
+                    });
+                }
+
+                AssetDatabase.SaveAssets();
+                return ToolResult.Ok(new
+                {
+                    action = "create",
+                    prefab_path = prefabPath,
+                    root_name = rootName,
+                    added_components = addedComponents.ToArray(),
+                    created_children = createdChildren.ToArray(),
+                    prefab = CreatePrefabSummary(prefabPath, prefabAsset, root)
+                });
+            }
+            catch (Exception exception)
+            {
+                return ToolResult.Error("tool_execution_failed", $"执行 create 时发生异常：{exception.Message}", new
+                {
+                    action = "create",
+                    prefab_path = prefabPath,
+                    exception = exception.GetType().FullName
+                });
             }
         }
 
@@ -444,6 +567,18 @@ namespace UnityCli.Editor.Tools
                 return error;
             }
 
+            // Navigate to child if specified
+            var targetRoot = prefabRoot;
+            if (ArgsHelper.TryGetOptional(args, "child_path", string.Empty, out var childPath, out _) && !string.IsNullOrWhiteSpace(childPath))
+            {
+                if (!TryFindChildTransform(prefabRoot.transform, childPath, out var childTransform, out error))
+                {
+                    PrefabUtility.UnloadPrefabContents(prefabRoot);
+                    return error;
+                }
+                targetRoot = childTransform.gameObject;
+            }
+
             try
             {
                 var addedComponents = new List<object>();
@@ -453,40 +588,40 @@ namespace UnityCli.Editor.Tools
 
                 if (hasRename)
                 {
-                    prefabRoot.name = renameValue;
+                    targetRoot.name = renameValue;
                 }
 
                 if (hasSetActive)
                 {
-                    prefabRoot.SetActive(setActive);
+                    targetRoot.SetActive(setActive);
                 }
 
                 if (hasTag)
                 {
-                    prefabRoot.tag = tagValue;
+                    targetRoot.tag = tagValue;
                 }
 
                 if (hasLayer)
                 {
-                    prefabRoot.layer = layer;
+                    targetRoot.layer = layer;
                 }
 
                 if (hasPosition)
                 {
-                    prefabRoot.transform.localPosition = position;
+                    targetRoot.transform.localPosition = position;
                 }
 
                 if (hasRotation)
                 {
-                    prefabRoot.transform.localRotation = Quaternion.Euler(rotation);
+                    targetRoot.transform.localRotation = Quaternion.Euler(rotation);
                 }
 
                 if (hasScale)
                 {
-                    prefabRoot.transform.localScale = scale;
+                    targetRoot.transform.localScale = scale;
                 }
 
-                if (!TryAddComponents(prefabRoot, componentTypesToAdd, addedComponents, out error))
+                if (!TryAddComponents(targetRoot, componentTypesToAdd, addedComponents, out error))
                 {
                     return error;
                 }
