@@ -13,7 +13,8 @@ namespace UnityCli.Transport
     {
         const int MaxRequestAttempts = 5;
         const int RetryDelayMs = 250;
-        const int DefaultRequestTimeoutMs = 5000;
+        // 与 Editor/Core/UnityCliDispatcherQueue.cs 默认值保持一致，避免 transport 先断开而 editor 仍在等待。
+        const int DefaultRequestTimeoutMs = 30000;
 
         public sealed class BridgeEndpointInfo
         {
@@ -281,6 +282,19 @@ namespace UnityCli.Transport
                 {
                     return await SendViaNamedPipeAsync(discovery.Endpoint, method, route, body, timeoutMs);
                 }
+                catch (OperationCanceledException exception)
+                {
+                    return BridgeCallResult.FromPayload(ResultFormatter.CreateErrorPayload(
+                        "bridge_timeout",
+                        "UnityCli bridge 请求超时。",
+                        new
+                        {
+                            endpointFile = GetEndpointFilePath(),
+                            route = NormalizeRoute(route),
+                            timeoutMs = timeoutMs.HasValue && timeoutMs.Value > 0 ? timeoutMs.Value : DefaultRequestTimeoutMs,
+                            lastError = exception.Message
+                        }));
+                }
                 catch (Exception exception) when (IsRetryable(exception))
                 {
                     lastException = exception;
@@ -399,7 +413,7 @@ namespace UnityCli.Transport
 
         static bool IsRetryable(Exception exception)
         {
-            return exception is IOException or OperationCanceledException or TimeoutException;
+            return exception is IOException or TimeoutException;
         }
 
         static string ReadString(System.Collections.Generic.IDictionary<string, object> root, string key)

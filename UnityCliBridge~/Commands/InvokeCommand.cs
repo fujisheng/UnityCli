@@ -11,6 +11,8 @@ namespace UnityCli.Commands
     static class InvokeCommand
     {
         const int PollDelayMs = 250;
+        // 与 BridgeClient / UnityCliDispatcherQueue 默认值保持一致，确保 invoke 传输与 editor 排队使用同一预算。
+        const int DefaultInvokeTimeoutMs = 30000;
 
         sealed class InvokeOptions
         {
@@ -47,8 +49,11 @@ namespace UnityCli.Commands
                 return ResultFormatter.WritePayloadAndGetExitCode(errorPayload);
             }
 
+            var effectiveTimeoutMs = options.TimeoutMs ?? request.timeoutMs ?? DefaultInvokeTimeoutMs;
+            request.timeoutMs = effectiveTimeoutMs;
+
             var client = new BridgeClient(options.ProjectPath);
-            var invokeResult = await client.PostAsync("/invoke", request, options.TimeoutMs);
+            var invokeResult = await client.PostAsync("/invoke", request, effectiveTimeoutMs);
             if (!options.WaitForCompletion || !IsPendingInvokeResponse(invokeResult.Payload, out var jobId))
             {
                 return ResultFormatter.WritePayloadAndGetExitCode(invokeResult.Payload);
@@ -65,7 +70,7 @@ namespace UnityCli.Commands
                     }));
             }
 
-            var waitPayload = await WaitForCompletionAsync(client, jobId, options.TimeoutMs);
+            var waitPayload = await WaitForCompletionAsync(client, jobId, effectiveTimeoutMs);
             return ResultFormatter.WritePayloadAndGetExitCode(waitPayload);
         }
 
