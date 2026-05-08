@@ -3,25 +3,42 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityCli.Protocol;
-using UnityEditor;
 using UnityEngine;
 
 namespace UnityCli.Editor.Core
 {
-    [InitializeOnLoad]
     public static class UnityCliDispatcher
     {
-        static UnityCliDispatcher()
-        {
-            EditorApplication.update -= HandleEditorUpdate;
-            EditorApplication.update += HandleEditorUpdate;
-        }
+        const int DefaultInvokeTimeoutMs = 30000;
 
         public static Task<InvokeResponse> Enqueue(InvokeRequest request)
         {
             return UnityCliDispatcherQueue.Enqueue(request);
+        }
+
+        public static Task<InvokeResponse> DispatchOnMainThreadAsync(InvokeRequest request)
+        {
+            var normalizedRequest = NormalizeRequest(request);
+            var completionSource = new TaskCompletionSource<InvokeResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var timeoutCancellation = CreateTimeoutCancellation(normalizedRequest.timeoutMs);
+            var timeoutRegistration = timeoutCancellation.Token.Register(() => HandleDispatchTimeout(normalizedRequest.requestId, normalizedRequest.tool, completionSource, timeoutCancellation));
+
+            if (!UnityCliBootstrap.PostToMainThread(() => ExecuteDispatchOnMainThread(normalizedRequest, completionSource, timeoutCancellation)))
+            {
+                DisposeDispatchTimeoutResources(timeoutRegistration, timeoutCancellation);
+                return Task.FromResult(CreateErrorResponse(normalizedRequest.requestId, "tool_timeout", $"工具 '{normalizedRequest.tool}' 主线程调度超时。"));
+            }
+
+            _ = completionSource.Task.ContinueWith(
+                _ => DisposeDispatchTimeoutResources(timeoutRegistration, timeoutCancellation),
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default);
+
+            return completionSource.Task;
         }
 
         public static InvokeResponse Dispatch(InvokeRequest request)
@@ -103,9 +120,9 @@ namespace UnityCli.Editor.Core
             return UnityCliJobManager.GetJobStatus(jobId);
         }
 
-        static void HandleEditorUpdate()
+        internal static void PumpOnce()
         {
-            if (!UnityCliDispatcherQueue.TryDequeue(out var request))
+            if (!UnityCliDispatcherQueue.TryDequeuePending(out var request))
             {
                 return;
             }
@@ -122,6 +139,14 @@ namespace UnityCli.Editor.Core
             }
 
             UnityCliDispatcherQueue.Complete(request, response);
+        }
+
+        internal static void PumpQueuedRequestsForEditorUpdate(int maxCount)
+        {
+            for (var i = 0; i < maxCount; i++)
+            {
+                PumpOnce();
+            }
         }
 
         static bool IsEditorBusy(ToolContext.EditorStateSnapshot editorState)
@@ -153,6 +178,66 @@ namespace UnityCli.Editor.Core
                     : new Dictionary<string, object>(StringComparer.Ordinal),
                 timeoutMs = request?.timeoutMs
             };
+        }
+
+        static void ExecuteDispatchOnMainThread(
+            InvokeRequest request,
+            TaskCompletionSource<InvokeResponse> completionSource,
+            CancellationTokenSource timeoutCancellation)
+        {
+            try
+            {
+                if (completionSource.Task.IsCompleted || timeoutCancellation.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                var response = Dispatch(request);
+                completionSource.TrySetResult(response ?? CreateErrorResponse(request.requestId, "tool_execution_failed", "调度器返回了空响应。"));
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception);
+                completionSource.TrySetResult(CreateErrorResponse(request?.requestId ?? string.Empty, "tool_execution_failed", "主线程调度执行失败。", exception.ToString()));
+            }
+        }
+
+        static void HandleDispatchTimeout(string requestId, string toolId, TaskCompletionSource<InvokeResponse> completionSource, CancellationTokenSource timeoutCancellation)
+        {
+            if (completionSource == null || timeoutCancellation == null || !timeoutCancellation.IsCancellationRequested)
+            {
+                return;
+            }
+
+            completionSource.TrySetResult(CreateErrorResponse(requestId, "tool_timeout", $"工具 '{toolId ?? string.Empty}' 主线程调度超时。"));
+        }
+
+        static CancellationTokenSource CreateTimeoutCancellation(int? timeoutMs)
+        {
+            var effectiveTimeoutMs = timeoutMs.HasValue && timeoutMs.Value > 0
+                ? timeoutMs.Value
+                : DefaultInvokeTimeoutMs;
+
+            return new CancellationTokenSource(effectiveTimeoutMs);
+        }
+
+        static void DisposeDispatchTimeoutResources(CancellationTokenRegistration timeoutRegistration, CancellationTokenSource timeoutCancellation)
+        {
+            try
+            {
+                timeoutRegistration.Dispose();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                timeoutCancellation.Dispose();
+            }
+            catch
+            {
+            }
         }
 
         static InvokeResponse CreateErrorResponse(string requestId, string code, string message, object details = null)

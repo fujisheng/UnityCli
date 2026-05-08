@@ -145,9 +145,9 @@ namespace UnityCli.Editor.Core
 
         static void StartLocked()
         {
-            var pipeName = BuildPipeName();
-            Debug.Log($"[UnityCli] StartLocked: pipeName={pipeName}");
             var token = Guid.NewGuid().ToString("N");
+            var pipeName = BuildPipeName(token);
+            Debug.Log($"[UnityCli] StartLocked: pipeName={pipeName}");
             var endpoint = UnityCliEndpointFile.CreateEndpoint(pipeName, token);
             Debug.Log($"[UnityCli] StartLocked: endpoint 已创建 (pid={endpoint.pid}, gen={endpoint.generation})");
             try
@@ -203,27 +203,33 @@ namespace UnityCli.Editor.Core
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                using var server = new NamedPipeServerStream(
+                NamedPipeServerStream server = null;
+                try
+                {
+                    server = new NamedPipeServerStream(
                     pipeName,
                     PipeDirection.InOut,
                     NamedPipeServerStream.MaxAllowedServerInstances,
                     PipeTransmissionMode.Byte,
                     PipeOptions.Asynchronous);
 
-                try
-                {
                     await server.WaitForConnectionAsync(cancellationToken);
+                    _ = ProcessAcceptedConnectionAsync(server, token, cancellationToken);
+                    server = null;
                 }
                 catch (OperationCanceledException)
                 {
+                    server?.Dispose();
                     break;
                 }
                 catch (ObjectDisposedException)
                 {
+                    server?.Dispose();
                     break;
                 }
                 catch (IOException exception)
                 {
+                    server?.Dispose();
                     if (cancellationToken.IsCancellationRequested)
                     {
                         break;
@@ -232,18 +238,27 @@ namespace UnityCli.Editor.Core
                     Debug.LogWarning($"[UnityCli] NamedPipe 等待连接失败：{exception.Message}");
                     continue;
                 }
+                catch
+                {
+                    server?.Dispose();
+                    throw;
+                }
+            }
+        }
 
+        static async Task ProcessAcceptedConnectionAsync(NamedPipeServerStream stream, string token, CancellationToken cancellationToken)
+        {
+            using (stream)
+            {
                 try
                 {
-                    await ProcessPipeConnection(server, token, cancellationToken);
+                    await ProcessPipeConnection(stream, token, cancellationToken);
                 }
                 catch (OperationCanceledException)
                 {
-                    break;
                 }
                 catch (ObjectDisposedException)
                 {
-                    break;
                 }
                 catch (Exception exception)
                 {
@@ -437,7 +452,7 @@ namespace UnityCli.Editor.Core
                 return;
             }
 
-            var invokeResponse = UnityCliDispatcher.Enqueue(invokeRequest).GetAwaiter().GetResult();
+            var invokeResponse = await UnityCliDispatcher.DispatchOnMainThreadAsync(invokeRequest);
             await WriteJson(stream, 200, invokeResponse, cancellationToken);
         }
 
@@ -530,8 +545,33 @@ namespace UnityCli.Editor.Core
                 body = UnityCliJson.Serialize(payload)
             };
 
-            await BridgePipeProtocol.WriteFrameAsync(stream, UnityCliJson.Serialize(response), cancellationToken);
-            await stream.FlushAsync(cancellationToken);
+            try
+            {
+                await BridgePipeProtocol.WriteFrameAsync(stream, UnityCliJson.Serialize(response), cancellationToken);
+                await stream.FlushAsync(cancellationToken);
+            }
+            catch (IOException exception) when (IsDisconnectedPipeException(exception))
+            {
+            }
+        }
+
+        static bool IsDisconnectedPipeException(IOException exception)
+        {
+            if (exception == null)
+            {
+                return false;
+            }
+
+            var win32ErrorCode = exception.HResult & 0xFFFF;
+            if (win32ErrorCode == 109 || win32ErrorCode == 232)
+            {
+                return true;
+            }
+
+            var message = exception.Message ?? string.Empty;
+            return message.IndexOf("Pipe is broken", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("pipe has been ended", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("broken pipe", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         static void SignalPipeShutdown(string pipeName)
@@ -551,12 +591,15 @@ namespace UnityCli.Editor.Core
             }
         }
 
-        static string BuildPipeName()
+        static string BuildPipeName(string token)
         {
             var projectRoot = Path.GetDirectoryName(Application.dataPath) ?? Directory.GetCurrentDirectory();
             var hash = projectRoot.GetHashCode().ToString("X8", CultureInfo.InvariantCulture);
             var pid = System.Diagnostics.Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture);
-            return PipeNamePrefix + hash + "-" + pid;
+            var uniqueSuffix = string.IsNullOrWhiteSpace(token)
+                ? Guid.NewGuid().ToString("N")
+                : token;
+            return PipeNamePrefix + hash + "-" + pid + "-" + uniqueSuffix;
         }
 
         static string ReadString(IDictionary<string, object> root, string key)
