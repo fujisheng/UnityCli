@@ -9,7 +9,7 @@ namespace UnityCli.Editor.Core
 {
     public static class UnityCliAllowlist
     {
-        const string DefaultAllowlistRelativePath = "Packages/com.UnityCli/Editor/Tools/BuiltIn/__default_allowlist.json";
+        const string DefaultAllowlistRelativePath = "Packages/UnityCli/Editor/Tools/BuiltIn/__default_allowlist.json";
         const string ProjectAllowlistRelativePath = "ProjectSettings/UnityCliAllowlist.json";
 
         static readonly StringComparer ToolIdComparer = StringComparer.Ordinal;

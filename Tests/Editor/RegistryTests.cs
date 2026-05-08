@@ -24,9 +24,11 @@ namespace UnityCli.Tests.Editor
             CollectionAssert.Contains(discoveredNames, "UnityCli.Editor.Tools.BuiltIn.TestEchoTool");
             CollectionAssert.Contains(discoveredNames, "UnityCli.Editor.Tools.BuiltIn.TestSleepTool");
             CollectionAssert.Contains(discoveredNames, "UnityCli.Editor.Tools.BuiltIn.EditorStatusTool");
+            CollectionAssert.Contains(discoveredNames, "Game.Editor.Cli.GenerateViewModelTool");
             Assert.IsTrue(UnityCliRegistry.TryGetTool("__test.echo", out _));
             Assert.IsTrue(UnityCliRegistry.TryGetTool("__test.sleep", out _));
             Assert.IsTrue(UnityCliRegistry.TryGetTool("editor.status", out _));
+            Assert.IsTrue(UnityCliRegistry.TryGetTool("ui_generate_viewmodel", out _));
         }
 
         [Test]

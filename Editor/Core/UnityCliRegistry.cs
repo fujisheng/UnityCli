@@ -36,14 +36,9 @@ namespace UnityCli.Editor.Core
         public static IReadOnlyList<Type> DiscoverTools()
         {
             var toolTypes = new List<Type>();
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            try
             {
-                if (!IsEditorAssembly(assembly))
-                {
-                    continue;
-                }
-
-                foreach (var type in GetLoadableTypes(assembly))
+                foreach (var type in TypeCache.GetTypesWithAttribute<UnityCliToolAttribute>())
                 {
                     if (type == null || !type.IsClass || type.IsAbstract)
                     {
@@ -58,7 +53,29 @@ namespace UnityCli.Editor.Core
                     toolTypes.Add(type);
                 }
             }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"[UnityCli] 通过 TypeCache 发现工具失败，将回退到程序集扫描。\n{exception}");
+                foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    foreach (var type in GetLoadableTypes(assembly))
+                    {
+                        if (type == null || !type.IsClass || type.IsAbstract)
+                        {
+                            continue;
+                        }
 
+                        if (type.GetCustomAttribute<UnityCliToolAttribute>(false) == null)
+                        {
+                            continue;
+                        }
+
+                        toolTypes.Add(type);
+                    }
+                }
+            }
+
+            toolTypes = toolTypes.Distinct().ToList();
             toolTypes.Sort(CompareToolTypes);
             return toolTypes;
         }
@@ -272,6 +289,11 @@ namespace UnityCli.Editor.Core
             }
             catch (ReflectionTypeLoadException exception)
             {
+                foreach (var loaderException in exception.LoaderExceptions.Where(item => item != null))
+                {
+                    Debug.LogWarning($"[UnityCli] 程序集类型加载异常：{assembly.FullName}\n{loaderException}");
+                }
+
                 return exception.Types.Where(type => type != null);
             }
             catch (Exception exception)
@@ -279,51 +301,6 @@ namespace UnityCli.Editor.Core
                 Debug.LogWarning($"[UnityCli] 读取程序集类型失败：{assembly.FullName}\n{exception}");
                 return Array.Empty<Type>();
             }
-        }
-
-        static bool IsEditorAssembly(Assembly assembly)
-        {
-            if (assembly == null)
-            {
-                return false;
-            }
-
-            var assemblyName = assembly.GetName().Name ?? string.Empty;
-            if (assemblyName.StartsWith("UnityEditor", StringComparison.Ordinal))
-            {
-                return true;
-            }
-
-            try
-            {
-                if (assembly.GetReferencedAssemblies().Any(reference => string.Equals(reference.Name, "UnityEditor", StringComparison.Ordinal)))
-                {
-                    return true;
-                }
-            }
-            catch (Exception exception)
-            {
-                Debug.LogWarning($"[UnityCli] 读取程序集引用失败：{assembly.FullName}\n{exception}");
-            }
-
-            try
-            {
-                var location = assembly.Location;
-                if (!string.IsNullOrWhiteSpace(location) && location.IndexOf("Editor", StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    return true;
-                }
-            }
-            catch (NotSupportedException)
-            {
-                return false;
-            }
-            catch (Exception exception)
-            {
-                Debug.LogWarning($"[UnityCli] 读取程序集位置失败：{assembly.FullName}\n{exception}");
-            }
-
-            return false;
         }
 
         static int CompareToolTypes(Type left, Type right)

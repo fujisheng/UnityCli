@@ -13,8 +13,13 @@ namespace UnityCli.Transport
     {
         const int MaxRequestAttempts = 5;
         const int RetryDelayMs = 250;
+<<<<<<< Updated upstream
         // 与 Editor/Core/UnityCliDispatcherQueue.cs 默认值保持一致，避免 transport 先断开而 editor 仍在等待。
         const int DefaultRequestTimeoutMs = 30000;
+=======
+        const int DefaultRequestTimeoutMs = 5000;
+        const int HeavyInvokeRequestTimeoutMs = 15000;
+>>>>>>> Stashed changes
 
         public sealed class BridgeEndpointInfo
         {
@@ -320,7 +325,7 @@ namespace UnityCli.Transport
         async Task<BridgeCallResult> SendViaNamedPipeAsync(BridgeEndpointInfo endpoint, string method, string route, object? body, int? timeoutMs)
         {
             using var client = new NamedPipeClientStream(".", endpoint.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-            using var cancellation = CreateCancellationSource(timeoutMs);
+            using var cancellation = CreateCancellationSource(method, route, body, timeoutMs);
             await client.ConnectAsync(cancellation.Token);
 
             var request = new BridgePipeRequest
@@ -403,12 +408,25 @@ namespace UnityCli.Transport
                 });
         }
 
-        static CancellationTokenSource CreateCancellationSource(int? timeoutMs)
+        static CancellationTokenSource CreateCancellationSource(string method, string route, object? body, int? timeoutMs)
         {
             var effectiveTimeout = timeoutMs.HasValue && timeoutMs.Value > 0
                 ? timeoutMs.Value
-                : DefaultRequestTimeoutMs;
+                : ResolveDefaultTimeoutMs(method, route, body);
             return new CancellationTokenSource(effectiveTimeout);
+        }
+
+        static int ResolveDefaultTimeoutMs(string method, string route, object? body)
+        {
+            if (string.Equals(method, "POST", StringComparison.Ordinal)
+                && string.Equals(NormalizeRoute(route), "/invoke", StringComparison.Ordinal)
+                && body is InvokeRequest request
+                && string.Equals(request.tool, "ui.validate_prefab", StringComparison.Ordinal))
+            {
+                return HeavyInvokeRequestTimeoutMs;
+            }
+
+            return DefaultRequestTimeoutMs;
         }
 
         static bool IsRetryable(Exception exception)
