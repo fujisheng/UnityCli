@@ -1,8 +1,8 @@
 {
   "name": "com.fujisheng.unitycli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "displayName": "UnityCli",
-  "description": "CLI for Unity Editor - allows external tools to call Unity functionality via HTTP/JSON",
+  "description": "CLI for Unity Editor - external tool bridge via Named Pipe. Supports prefab create/modify, scene/component/asset management, and code execution.",
   "unity": "2021.3",
   "dependencies": {},
   "author": {
