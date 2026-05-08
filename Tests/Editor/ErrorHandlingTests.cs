@@ -70,6 +70,13 @@ namespace UnityCli.Tests.Editor
             public string Body { get; set; }
         }
 
+        sealed class DepthNode
+        {
+            public string Name { get; set; }
+
+            public DepthNode Child { get; set; }
+        }
+
         [SetUp]
         public void SetUp()
         {
@@ -258,6 +265,68 @@ namespace UnityCli.Tests.Editor
             Assert.IsNotNull(status.result);
             Assert.IsFalse(status.result.ok);
             Assert.AreEqual("tool_execution_failed", status.result.error.code);
+        }
+
+        [Test]
+        public void SerializeJson_WithSelfReferencingDictionary_StopsAtCycle()
+        {
+            var payload = new Dictionary<string, object>(StringComparer.Ordinal);
+            payload["self"] = payload;
+
+            var json = SerializeJson(payload);
+
+            Assert.AreEqual("{\"self\":null}", json);
+        }
+
+        [Test]
+        public void SerializeJson_WithReflectionMember_UsesOpaqueSummary()
+        {
+            var payload = new
+            {
+                property = typeof(string).GetProperty(nameof(string.Length))
+            };
+
+            var json = SerializeJson(payload);
+
+            StringAssert.Contains("\"property\":\"System.String.Length\"", json);
+        }
+
+        [Test]
+        public void SerializeJson_WithUnityObject_UsesOpaqueSummary()
+        {
+            var gameObject = new GameObject("UnityCliJson-TestObject");
+            try
+            {
+                var payload = new
+                {
+                    target = gameObject
+                };
+
+                var json = SerializeJson(payload);
+
+                StringAssert.Contains("\"target\":\"UnityEngine.GameObject:UnityCliJson-TestObject#", json);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(gameObject);
+            }
+        }
+
+        [Test]
+        public void SerializeJson_WithDeepObjectGraph_StopsAtDepthLimit()
+        {
+            var root = new DepthNode { Name = "0" };
+            var current = root;
+            for (var index = 1; index <= 12; index++)
+            {
+                current.Child = new DepthNode { Name = index.ToString(CultureInfo.InvariantCulture) };
+                current = current.Child;
+            }
+
+            var json = SerializeJson(root);
+
+            StringAssert.Contains("\"Name\":\"0\"", json);
+            StringAssert.Contains("\"Child\":null", json);
         }
 
         static void AllowTool(string toolId)

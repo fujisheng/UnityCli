@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using UnityCli.Editor.Attributes;
 using UnityCli.Editor.Core;
 using UnityCli.Protocol;
@@ -154,6 +155,11 @@ namespace UnityCli.Editor.Tools
             // 检查测试是否已完成
             if (state.isCompleted)
             {
+                if (!HasValidSummary(state))
+                {
+                    return ToolResult.Error("test_results_empty", "测试运行结束，但未返回有效结果。", CreateCompletionDetails(state));
+                }
+
                 return ToolResult.Ok(state.summary, "test run completed");
             }
 
@@ -185,16 +191,26 @@ namespace UnityCli.Editor.Tools
 
         bool StartTestRun(TestsRunJobState state, UnityCliJob job)
         {
-            var testRunnerApiType = Type.GetType("UnityEditor.TestTools.TestRunner.TestRunnerApi, UnityEditor.TestRunner");
+            var testRunnerApiType = ResolveType(
+                "UnityEditor.TestTools.TestRunner.Api.TestRunnerApi, UnityEditor.TestRunner",
+                "UnityEditor.TestTools.TestRunner.TestRunnerApi, UnityEditor.TestRunner");
             if (testRunnerApiType == null)
             {
                 return false;
             }
 
-            var executionSettingsType = Type.GetType("UnityEditor.TestTools.TestRunner.ExecutionSettings, UnityEditor.TestRunner");
-            var filterType = Type.GetType("UnityEditor.TestTools.TestRunner.Filter, UnityEditor.TestRunner");
-            var testModeType = Type.GetType("UnityEditor.TestTools.TestRunner.TestMode, UnityEditor.TestRunner");
-            var callbacksType = Type.GetType("UnityEditor.TestTools.TestRunner.ICallbacks, UnityEditor.TestRunner");
+            var executionSettingsType = ResolveType(
+                "UnityEditor.TestTools.TestRunner.Api.ExecutionSettings, UnityEditor.TestRunner",
+                "UnityEditor.TestTools.TestRunner.ExecutionSettings, UnityEditor.TestRunner");
+            var filterType = ResolveType(
+                "UnityEditor.TestTools.TestRunner.Api.Filter, UnityEditor.TestRunner",
+                "UnityEditor.TestTools.TestRunner.Filter, UnityEditor.TestRunner");
+            var testModeType = ResolveType(
+                "UnityEditor.TestTools.TestRunner.Api.TestMode, UnityEditor.TestRunner",
+                "UnityEditor.TestTools.TestRunner.TestMode, UnityEditor.TestRunner");
+            var callbacksType = ResolveType(
+                "UnityEditor.TestTools.TestRunner.Api.ICallbacks, UnityEditor.TestRunner",
+                "UnityEditor.TestTools.TestRunner.ICallbacks, UnityEditor.TestRunner");
 
             if (executionSettingsType == null || filterType == null || testModeType == null)
             {
@@ -226,29 +242,28 @@ namespace UnityCli.Editor.Tools
                 return false;
             }
 
+            SetMemberValue(filterType, filter, "testMode", testMode);
+
             // 设置 filter 属性
+            var resolvedGroupNames = MergeGroupFilters(state.groupNames, state.testNames);
             if (state.testNames != null && state.testNames.Length > 0)
             {
-                var namesProperty = filterType.GetProperty("testNames");
-                namesProperty?.SetValue(filter, state.testNames);
+                SetMemberValue(filterType, filter, "testNames", null);
             }
 
-            if (state.groupNames != null && state.groupNames.Length > 0)
+            if (resolvedGroupNames != null && resolvedGroupNames.Length > 0)
             {
-                var groupProperty = filterType.GetProperty("groupNames");
-                groupProperty?.SetValue(filter, state.groupNames);
+                SetMemberValue(filterType, filter, "groupNames", resolvedGroupNames);
             }
 
             if (state.categoryNames != null && state.categoryNames.Length > 0)
             {
-                var categoryProperty = filterType.GetProperty("categoryNames");
-                categoryProperty?.SetValue(filter, state.categoryNames);
+                SetMemberValue(filterType, filter, "categoryNames", state.categoryNames);
             }
 
             if (state.assemblyNames != null && state.assemblyNames.Length > 0)
             {
-                var assemblyProperty = filterType.GetProperty("assemblyNames");
-                assemblyProperty?.SetValue(filter, state.assemblyNames);
+                SetMemberValue(filterType, filter, "assemblyNames", state.assemblyNames);
             }
 
             // 创建 ExecutionSettings
@@ -262,33 +277,61 @@ namespace UnityCli.Editor.Tools
             }
             else
             {
-                executionSettings = Activator.CreateInstance(executionSettingsType);
-                if (executionSettings == null)
-                {
-                    return false;
-                }
-
-                // 尝试通过属性设置
-                var filtersProperty = executionSettingsType.GetProperty("filters");
-                if (filtersProperty != null)
+                var filtersConstructor = executionSettingsType.GetConstructor(new[] { filterType.MakeArrayType() });
+                if (filtersConstructor != null)
                 {
                     var filters = Array.CreateInstance(filterType, 1);
                     filters.SetValue(filter, 0);
-                    filtersProperty.SetValue(executionSettings, filters);
+                    executionSettings = filtersConstructor.Invoke(new object[] { filters });
+                }
+                else
+                {
+                    executionSettings = Activator.CreateInstance(executionSettingsType);
+                    if (executionSettings == null)
+                    {
+                        return false;
+                    }
+
+                    // 尝试通过属性设置
+                    var filters = Array.CreateInstance(filterType, 1);
+                    filters.SetValue(filter, 0);
+                    SetMemberValue(executionSettingsType, executionSettings, "filters", filters);
                 }
 
-                var overwriteProperty = executionSettingsType.GetProperty("overwriteTestResultsFile");
-                overwriteProperty?.SetValue(executionSettings, false);
+                SetMemberValue(executionSettingsType, executionSettings, "overwriteTestResultsFile", false);
+            }
+
+            if (string.Equals(state.mode, "EditMode", StringComparison.OrdinalIgnoreCase))
+            {
+                SetMemberValue(executionSettingsType, executionSettings, "runSynchronously", true);
             }
 
             // 注册回调
             if (callbacksType != null)
             {
-                var callback = new TestRunCallback(state);
-                var registerMethod = testRunnerApiType.GetMethod("RegisterCallbacks", new[] { callbacksType });
+                var callback = CreateCallbackProxy(callbacksType, state);
+                if (callback == null)
+                {
+                    return false;
+                }
+
+                var registerMethod = testRunnerApiType.GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                    .FirstOrDefault(method => method.Name == "RegisterCallbacks"
+                        && method.IsGenericMethodDefinition
+                        && method.GetGenericArguments().Length == 1
+                        && (method.GetParameters().Length == 1 || method.GetParameters().Length == 2));
                 if (registerMethod != null)
                 {
-                    registerMethod.Invoke(api, new object[] { callback });
+                    var genericMethod = registerMethod.MakeGenericMethod(callbacksType);
+                    var parameters = registerMethod.GetParameters();
+                    if (parameters.Length == 1)
+                    {
+                        genericMethod.Invoke(api, new[] { callback });
+                    }
+                    else
+                    {
+                        genericMethod.Invoke(api, new object[] { callback, 0 });
+                    }
                 }
             }
 
@@ -302,6 +345,172 @@ namespace UnityCli.Editor.Tools
             executeMethod.Invoke(api, new object[] { executionSettings });
             state.testStarted = true;
             return true;
+        }
+
+        static Type ResolveType(params string[] typeNames)
+        {
+            if (typeNames == null || typeNames.Length == 0)
+            {
+                return null;
+            }
+
+            foreach (var typeName in typeNames)
+            {
+                if (string.IsNullOrWhiteSpace(typeName))
+                {
+                    continue;
+                }
+
+                var type = Type.GetType(typeName, throwOnError: false);
+                if (type != null)
+                {
+                    return type;
+                }
+            }
+
+            return null;
+        }
+
+        static object CreateCallbackProxy(Type callbacksType, TestsRunJobState state)
+        {
+            if (callbacksType == null || state == null)
+            {
+                return null;
+            }
+
+            var createMethod = typeof(DispatchProxy).GetMethods(BindingFlags.Public | BindingFlags.Static)
+                .FirstOrDefault(method => method.Name == "Create" && method.IsGenericMethodDefinition);
+            if (createMethod == null)
+            {
+                return null;
+            }
+
+            var proxy = createMethod.MakeGenericMethod(callbacksType, typeof(TestsRunCallbackDispatchProxy)).Invoke(null, null);
+            var typedProxy = proxy as TestsRunCallbackDispatchProxy;
+            if (typedProxy == null)
+            {
+                return null;
+            }
+
+            var callback = new TestRunCallback(state);
+            typedProxy.dispatcher = (methodName, args) =>
+            {
+                var argument = args != null && args.Length > 0 ? args[0] : null;
+                switch (methodName)
+                {
+                    case "RunStarted":
+                        callback.RunStarted(argument);
+                        break;
+                    case "RunFinished":
+                        callback.RunFinished(argument);
+                        break;
+                    case "TestStarted":
+                        callback.TestStarted(argument);
+                        break;
+                    case "TestFinished":
+                        callback.TestFinished(argument);
+                        break;
+                }
+            };
+
+            return proxy;
+        }
+
+        static void SetMemberValue(Type type, object target, string memberName, object value)
+        {
+            if (type == null || target == null || string.IsNullOrWhiteSpace(memberName))
+            {
+                return;
+            }
+
+            var property = type.GetProperty(memberName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (property != null)
+            {
+                property.SetValue(target, value);
+                return;
+            }
+
+            var field = type.GetField(memberName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            field?.SetValue(target, value);
+        }
+
+        static bool HasValidSummary(TestsRunJobState state)
+        {
+            if (state?.summary == null)
+            {
+                return false;
+            }
+
+            if (state.summary.total > 0)
+            {
+                return true;
+            }
+
+            if (!HasFilters(state))
+            {
+                return state.receivedRunFinished;
+            }
+
+            return state.summary.results != null && state.summary.results.Count > 0;
+        }
+
+        static bool HasFilters(TestsRunJobState state)
+        {
+            if (state == null)
+            {
+                return false;
+            }
+
+            return HasAnyValues(state.testNames)
+                || HasAnyValues(state.groupNames)
+                || HasAnyValues(state.categoryNames)
+                || HasAnyValues(state.assemblyNames);
+        }
+
+        static bool HasAnyValues(string[] values)
+        {
+            return values != null && values.Any(value => !string.IsNullOrWhiteSpace(value));
+        }
+
+        static string[] MergeGroupFilters(string[] groupNames, string[] testNames)
+        {
+            var values = new List<string>();
+            if (groupNames != null)
+            {
+                values.AddRange(groupNames.Where(value => !string.IsNullOrWhiteSpace(value)));
+            }
+
+            if (testNames != null)
+            {
+                foreach (var testName in testNames)
+                {
+                    if (string.IsNullOrWhiteSpace(testName))
+                    {
+                        continue;
+                    }
+
+                    values.Add($"(^|.*\\.){Regex.Escape(testName)}$");
+                }
+            }
+
+            return values.Count == 0 ? null : values.ToArray();
+        }
+
+        static object CreateCompletionDetails(TestsRunJobState state)
+        {
+            return new
+            {
+                mode = state?.mode,
+                test_names = state?.testNames,
+                group_names = state?.groupNames,
+                category_names = state?.categoryNames,
+                assembly_names = state?.assemblyNames,
+                receivedRunStarted = state?.receivedRunStarted ?? false,
+                receivedRunFinished = state?.receivedRunFinished ?? false,
+                receivedTestFinished = state?.receivedTestFinished ?? false,
+                total = state?.summary?.total ?? 0,
+                results = state?.summary?.results?.Count ?? 0
+            };
         }
 
         static string[] ToStringArray(object raw)
@@ -357,9 +566,10 @@ namespace UnityCli.Editor.Tools
             }
 
             // 通过反射调用 — ICallbacks.RunStarted
-            public void RunStarted(string testsToRun)
+            public void RunStarted(object testsToRun)
             {
                 // 测试开始运行
+                state.receivedRunStarted = true;
             }
 
             // 通过反射调用 — ICallbacks.RunFinished
@@ -367,13 +577,15 @@ namespace UnityCli.Editor.Tools
             {
                 if (result == null)
                 {
+                    state.summary ??= new TestRunSummary();
+                    state.receivedRunFinished = true;
                     state.isCompleted = true;
-                    state.summary = new TestRunSummary();
                     return;
                 }
 
                 try
                 {
+                    state.summary ??= new TestRunSummary();
                     var resultType = result.GetType();
                     // ITestResultAdaptor 有 PassCount, FailCount, SkipCount, InconclusiveCount, Duration
                     var passCount = (int)(resultType.GetProperty("PassCount")?.GetValue(result) ?? 0);
@@ -399,6 +611,7 @@ namespace UnityCli.Editor.Tools
                     state.summary = new TestRunSummary();
                 }
 
+                state.receivedRunFinished = true;
                 state.isCompleted = true;
             }
 
@@ -418,6 +631,8 @@ namespace UnityCli.Editor.Tools
 
                 try
                 {
+                    state.summary ??= new TestRunSummary();
+                    state.receivedTestFinished = true;
                     var resultType = result.GetType();
                     var name = resultType.GetProperty("FullName")?.GetValue(result)?.ToString()
                         ?? resultType.GetProperty("Name")?.GetValue(result)?.ToString()
@@ -516,6 +731,9 @@ namespace UnityCli.Editor.Tools
             public string[] assemblyNames;
             public bool testStarted;
             public bool isCompleted;
+            public bool receivedRunStarted;
+            public bool receivedRunFinished;
+            public bool receivedTestFinished;
             public TestRunSummary summary;
         }
 
@@ -535,6 +753,21 @@ namespace UnityCli.Editor.Tools
             public string status;
             public double duration;
             public string message;
+        }
+    }
+
+    public class TestsRunCallbackDispatchProxy : DispatchProxy
+    {
+        public Action<string, object[]> dispatcher;
+
+        public TestsRunCallbackDispatchProxy()
+        {
+        }
+
+        protected override object Invoke(MethodInfo targetMethod, object[] args)
+        {
+            dispatcher?.Invoke(targetMethod?.Name, args);
+            return null;
         }
     }
 }

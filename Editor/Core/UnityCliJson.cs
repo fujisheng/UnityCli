@@ -4,15 +4,18 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
 using System.Text;
+using UnityObject = UnityEngine.Object;
 
 namespace UnityCli.Editor.Core
 {
     static class UnityCliJson
     {
+        const int MaxSerializationDepth = 8;
+
         public static string Serialize(object value)
         {
             var visited = new HashSet<object>(ReferenceEqualityComparer.Instance);
-            return SerializeValue(value, visited);
+            return SerializeValue(value, visited, 0);
         }
 
         public static object Deserialize(string json)
@@ -52,7 +55,7 @@ namespace UnityCli.Editor.Core
             }
         }
 
-        static string SerializeValue(object value, HashSet<object> visited)
+        static string SerializeValue(object value, HashSet<object> visited, int depth)
         {
             if (value == null)
             {
@@ -89,39 +92,67 @@ namespace UnityCli.Editor.Core
                 return Convert.ToString(value, CultureInfo.InvariantCulture);
             }
 
+            var type = value.GetType();
+            if (TrySerializeOpaqueValue(value, type, out var opaqueJson))
+            {
+                return opaqueJson;
+            }
+
+            if (depth >= MaxSerializationDepth)
+            {
+                return "null";
+            }
+
+            var shouldTrackReference = !type.IsValueType;
+            if (shouldTrackReference && !visited.Add(value))
+            {
+                return "null";
+            }
+
             if (value is IDictionary dictionary)
             {
-                return SerializeDictionary(dictionary, visited);
+                try
+                {
+                    return SerializeDictionary(dictionary, visited, depth + 1);
+                }
+                finally
+                {
+                    if (shouldTrackReference)
+                    {
+                        visited.Remove(value);
+                    }
+                }
             }
 
             if (value is IEnumerable enumerable)
             {
-                return SerializeArray(enumerable, visited);
-            }
-
-            var type = value.GetType();
-            if (!type.IsValueType)
-            {
-                if (!visited.Add(value))
+                try
                 {
-                    return "null";
+                    return SerializeArray(enumerable, visited, depth + 1);
+                }
+                finally
+                {
+                    if (shouldTrackReference)
+                    {
+                        visited.Remove(value);
+                    }
                 }
             }
 
             try
             {
-                return SerializeObject(value, visited);
+                return SerializeObject(value, visited, depth + 1);
             }
             finally
             {
-                if (!type.IsValueType)
+                if (shouldTrackReference)
                 {
                     visited.Remove(value);
                 }
             }
         }
 
-        static string SerializeDictionary(IDictionary dictionary, HashSet<object> visited)
+        static string SerializeDictionary(IDictionary dictionary, HashSet<object> visited, int depth)
         {
             var builder = new StringBuilder();
             builder.Append('{');
@@ -138,14 +169,14 @@ namespace UnityCli.Editor.Core
                     .Append(Escape(Convert.ToString(entry.Key, CultureInfo.InvariantCulture)))
                     .Append('"')
                     .Append(':')
-                    .Append(SerializeValue(entry.Value, visited));
+                    .Append(SerializeValue(entry.Value, visited, depth));
             }
 
             builder.Append('}');
             return builder.ToString();
         }
 
-        static string SerializeArray(IEnumerable enumerable, HashSet<object> visited)
+        static string SerializeArray(IEnumerable enumerable, HashSet<object> visited, int depth)
         {
             var builder = new StringBuilder();
             builder.Append('[');
@@ -158,14 +189,14 @@ namespace UnityCli.Editor.Core
                 }
 
                 isFirst = false;
-                builder.Append(SerializeValue(item, visited));
+                builder.Append(SerializeValue(item, visited, depth));
             }
 
             builder.Append(']');
             return builder.ToString();
         }
 
-        static string SerializeObject(object value, HashSet<object> visited)
+        static string SerializeObject(object value, HashSet<object> visited, int depth)
         {
             var builder = new StringBuilder();
             builder.Append('{');
@@ -178,32 +209,40 @@ namespace UnityCli.Editor.Core
                     continue;
                 }
 
-                var propertyValue = property.GetValue(value, null);
+                if (!TryGetMemberValue(() => property.GetValue(value, null), out var propertyValue))
+                {
+                    continue;
+                }
+
                 if (propertyValue == null)
                 {
                     continue;
                 }
 
-                AppendMember(builder, property.Name, propertyValue, visited, ref isFirst);
+                AppendMember(builder, property.Name, propertyValue, visited, depth, ref isFirst);
             }
 
             var fields = value.GetType().GetFields(BindingFlags.Instance | BindingFlags.Public);
             foreach (var field in fields)
             {
-                var fieldValue = field.GetValue(value);
+                if (!TryGetMemberValue(() => field.GetValue(value), out var fieldValue))
+                {
+                    continue;
+                }
+
                 if (fieldValue == null)
                 {
                     continue;
                 }
 
-                AppendMember(builder, field.Name, fieldValue, visited, ref isFirst);
+                AppendMember(builder, field.Name, fieldValue, visited, depth, ref isFirst);
             }
 
             builder.Append('}');
             return builder.ToString();
         }
 
-        static void AppendMember(StringBuilder builder, string name, object value, HashSet<object> visited, ref bool isFirst)
+        static void AppendMember(StringBuilder builder, string name, object value, HashSet<object> visited, int depth, ref bool isFirst)
         {
             if (!isFirst)
             {
@@ -215,7 +254,125 @@ namespace UnityCli.Editor.Core
                 .Append(Escape(name))
                 .Append('"')
                 .Append(':')
-                .Append(SerializeValue(value, visited));
+                .Append(SerializeValue(value, visited, depth));
+        }
+
+        static bool TrySerializeOpaqueValue(object value, Type type, out string json)
+        {
+            json = null;
+            if (value is UnityObject unityObject)
+            {
+                json = unityObject == null
+                    ? "null"
+                    : Quote(BuildUnityObjectSummary(unityObject));
+                return true;
+            }
+
+            if (value is Type reflectionType)
+            {
+                json = Quote(reflectionType.AssemblyQualifiedName ?? reflectionType.FullName ?? reflectionType.Name);
+                return true;
+            }
+
+            if (value is MemberInfo memberInfo)
+            {
+                json = Quote(BuildMemberInfoSummary(memberInfo));
+                return true;
+            }
+
+            if (value is ParameterInfo parameterInfo)
+            {
+                json = Quote(BuildParameterInfoSummary(parameterInfo));
+                return true;
+            }
+
+            if (value is Assembly assembly)
+            {
+                json = Quote(assembly.FullName ?? assembly.GetName().Name ?? assembly.ToString());
+                return true;
+            }
+
+            if (value is Module module)
+            {
+                json = Quote(module.Name);
+                return true;
+            }
+
+            if (value is Delegate callback)
+            {
+                json = Quote(BuildDelegateSummary(callback));
+                return true;
+            }
+
+            if (value is Exception exception)
+            {
+                json = Quote(exception.ToString());
+                return true;
+            }
+
+            if (IsReflectionType(type))
+            {
+                json = Quote(Convert.ToString(value, CultureInfo.InvariantCulture) ?? type.FullName ?? type.Name);
+                return true;
+            }
+
+            return false;
+        }
+
+        static bool IsReflectionType(Type type)
+        {
+            return type.Namespace != null
+                && type.Namespace.StartsWith("System.Reflection", StringComparison.Ordinal);
+        }
+
+        static string BuildUnityObjectSummary(UnityObject unityObject)
+        {
+            return $"{unityObject.GetType().FullName}:{unityObject.name}#{unityObject.GetInstanceID()}";
+        }
+
+        static string BuildMemberInfoSummary(MemberInfo memberInfo)
+        {
+            var declaringTypeName = memberInfo.DeclaringType?.FullName ?? "<global>";
+            return $"{declaringTypeName}.{memberInfo.Name}";
+        }
+
+        static string BuildParameterInfoSummary(ParameterInfo parameterInfo)
+        {
+            var memberName = parameterInfo.Member != null
+                ? BuildMemberInfoSummary(parameterInfo.Member)
+                : "<unknown>";
+            return $"{memberName}({parameterInfo.Name})";
+        }
+
+        static string BuildDelegateSummary(Delegate callback)
+        {
+            var method = callback.Method;
+            if (method == null)
+            {
+                return callback.GetType().FullName ?? callback.GetType().Name;
+            }
+
+            var declaringTypeName = method.DeclaringType?.FullName ?? "<global>";
+            return $"{declaringTypeName}.{method.Name}";
+        }
+
+        static bool TryGetMemberValue(Func<object> getter, out object value)
+        {
+            try
+            {
+                value = getter();
+                return true;
+            }
+            catch
+            {
+                value = null;
+                return false;
+            }
+        }
+
+        static string Quote(string value)
+        {
+            return '"' + Escape(value) + '"';
         }
 
         static bool IsNumeric(object value)
