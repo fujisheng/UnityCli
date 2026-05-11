@@ -13,13 +13,8 @@ namespace UnityCli.Transport
     {
         const int MaxRequestAttempts = 5;
         const int RetryDelayMs = 250;
-<<<<<<< Updated upstream
-        // 与 Editor/Core/UnityCliDispatcherQueue.cs 默认值保持一致，避免 transport 先断开而 editor 仍在等待。
-        const int DefaultRequestTimeoutMs = 30000;
-=======
         const int DefaultRequestTimeoutMs = 5000;
         const int HeavyInvokeRequestTimeoutMs = 15000;
->>>>>>> Stashed changes
 
         public sealed class BridgeEndpointInfo
         {
