@@ -5,6 +5,8 @@ using UnityEditor;
 using UnityEngine;
 using UnityEngine.LowLevel;
 
+using UnityCli.Editor.UI;
+
 namespace UnityCli.Editor.Core
 {
     [InitializeOnLoad]
@@ -26,6 +28,7 @@ namespace UnityCli.Editor.Core
         static int wakeDrainScheduled;
         static double nextStartAttemptTime;
         static double nextEndpointCheckTime;
+        static bool bridgeAutoBuildDone;
 
         static UnityCliBootstrap()
         {
@@ -53,6 +56,18 @@ namespace UnityCli.Editor.Core
         {
             CaptureMainThreadContext();
             DrainPostedMainThreadActions();
+
+            // 自动编译 Bridge：包加载后仅执行一次
+            if (!bridgeAutoBuildDone && !UnityCliBridgeBuilder.IsBuilding && IsEditorSafeToStart())
+            {
+                bridgeAutoBuildDone = true;
+                if (!UnityCliBridgeBuilder.HasBridgeExecutable())
+                {
+                    Debug.Log("[UnityCli] 检测到 Bridge 未编译，开始自动编译...");
+                    UnityCliBridgeBuilder.Build();
+                }
+            }
+
             if (EditorApplication.isPlaying)
             {
                 InstallPlayModePlayerLoopDrain();
