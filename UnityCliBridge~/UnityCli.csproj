@@ -11,8 +11,7 @@
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <PublishTrimmed>false</PublishTrimmed>
-    <OutDir>$(MSBuildProjectDirectory)/../../../Library/UnityCliBridge/</OutDir>
-    <PublishDir>$(MSBuildProjectDirectory)/../../../Library/UnityCliBridge/</PublishDir>
+    <!-- 输出路径由 UnityCliBridgeBuilder 通过 -o 参数动态指定 -->
   </PropertyGroup>
 
   <ItemGroup>

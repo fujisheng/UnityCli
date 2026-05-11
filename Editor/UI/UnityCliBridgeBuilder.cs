@@ -64,9 +64,17 @@ namespace UnityCli.Editor.UI
 
             try
             {
+                // 通过 git URL 安装时包位于 Library/PackageCache/ 下，
+                // csproj 中的相对路径会解析错误，因此显式传入绝对输出路径。
+                var outputDir = Path.Combine(GetProjectRoot(), BridgeOutputDir);
+                if (!Directory.Exists(outputDir))
+                {
+                    Directory.CreateDirectory(outputDir);
+                }
+
                 using var process = new System.Diagnostics.Process();
                 process.StartInfo.FileName = "dotnet";
-                process.StartInfo.Arguments = $"publish \"{projectFile}\" -c Release --nologo -v minimal";
+                process.StartInfo.Arguments = $"publish \"{projectFile}\" -c Release --nologo -v minimal -o \"{outputDir}\"";
                 process.StartInfo.WorkingDirectory = bridgeDir;
                 process.StartInfo.UseShellExecute = false;
                 process.StartInfo.RedirectStandardOutput = true;

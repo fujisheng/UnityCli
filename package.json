@@ -1,6 +1,6 @@
 {
   "name": "com.fujisheng.unitycli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "displayName": "UnityCli",
   "description": "CLI for Unity Editor - external tool bridge via Named Pipe. Supports prefab create/modify, scene/component/asset management, and code execution.",
   "unity": "2021.3",
