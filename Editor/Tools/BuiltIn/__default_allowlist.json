@@ -12,6 +12,7 @@
     "packages",
     "component",
     "prefab",
+    "screenshot.capture",
     "script.create",
     "script.validate"
   ]
